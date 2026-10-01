@@ -6,9 +6,8 @@ jobs:
   probe:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env:
-      RARS_HOME: ${{ runner.temp }}/rars
     steps:
+      - run: echo "RARS_HOME=$RUNNER_TEMP/rars" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
