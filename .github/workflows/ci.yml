@@ -1,0 +1,33 @@
+# Guards the engine decision: the SessionStart hook still prepares RARS from scratch,
+# the wrapper honours docs/engine-protocol.md against unmodified RARS (released jar and
+# a jar built from the pinned commit), and the java.desktop finding still holds.
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: SessionStart hook from scratch (same script every Claude session runs)
+        run: |
+          echo "RARS_HOME=$RUNNER_TEMP/rars" >> "$GITHUB_ENV"
+          RARS_HOME="$RUNNER_TEMP/rars" CLAUDE_PROJECT_DIR="$PWD" .claude/hooks/session-start.sh
+      - name: SessionStart hook again (must be a no-op)
+        run: CLAUDE_PROJECT_DIR="$PWD" .claude/hooks/session-start.sh
+      - name: bench + checks (released jar)
+        run: probe/run.sh all
+      - name: checks (jar built from the pinned RARS commit)
+        run: RARS_JAR="$RARS_HOME/rars-src.jar" python3 probe/checks.py probe/build/jlink/min
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probe-results
+          path: probe/results/

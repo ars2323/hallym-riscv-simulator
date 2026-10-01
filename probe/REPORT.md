@@ -167,11 +167,33 @@ jlink 크기는 Linux 에서만 쟀다. Windows 의 `java.desktop` 은 네이티
 ## 6. 막힌 것
 
 없음. 막힐 뻔한 것은 위의 "지저분한 곳" 네 가지와 JVM 로그의 stdout 오염이며, 모두 RARS 를
-고치지 않고 래퍼 쪽에서 해결했다. 클라우드 환경의 설정 스크립트는 이 세션에서 바꿀 수 없어서
-`probe/setup.sh` 로 만들어 두었다(아래).
+고치지 않고 래퍼 쪽에서 해결했다.
 
-### 클라우드 환경 설정 스크립트
+(정리 라운드에서 갱신) 설정은 이제 저장소 안에 있다. `.claude/settings.json` 의 SessionStart 훅이
+`probe/setup.sh` 를 부른다. setup.sh 는 더 이상 apt 를 쓰지 않는다 — JDK 가 없으면 크게 실패한다.
+RARS 는 `$RARS_HOME`(기본 `~/.cache/hallym-riscv/rars`)에 놓인다.
 
-이 컨테이너 이미지에는 OpenJDK 21(jlink 포함)이 이미 있다. 환경 설정의 Setup script 에
-`probe/setup.sh` 의 내용을 붙여 넣으면 된다. JDK 가 없으면 apt 로 설치하고, RARS jar(sha256 확인)와
-고정 커밋 소스를 받아 빌드한다. 이 컨테이너에서 처음부터 돌렸을 때 5.2 초 걸렸다(5분 한도 안).
+## 7. 정리 라운드 추가: `java.desktop` 은 피할 수 없다
+
+RARS 를 고치지 않는다는 조건에서 확인했다. 실험은 `probe/src/DesktopExperiment.java`,
+판정은 `checks.py` 의 `without java.desktop` 항목(음성 대조: 전체 JDK 에서는 같은 실험이 성공).
+
+| 경로 | java.base+java.prefs 런타임 | 전체 JDK |
+|---|---|---|
+| `Globals.initialize()` (탐침이 쓰는 길) | 실패: `ClassNotFoundException: java.awt.Color` at `SyntaxUtilities.getDefaultSyntaxStyles:96` | 성공 |
+| `rars.api.Program` | 실패: 같은 곳 (`new Program()` 이 `Globals.initialize()` 를 부른다) | 성공 |
+| `Settings` 만 빼고 나머지 전역을 손으로 채움 | 실패: `InstructionSet.<clinit>:60` 에서 `Globals.getSettings()` 가 null | **실패(같은 이유)** |
+
+- 어셈블·실행 경로는 `Settings` 를 **반드시** 초기화해야 한다. `InstructionSet` 의 정적 초기화가
+  설정을 읽고, 핵심 클래스에 `Globals.getSettings()` 호출 지점이 31곳 있다(Memory 10, RegisterFile 3,
+  Simulator 3, Program 3, 그 밖). `Globals.settings` 는 패키지 전용 필드라 다른 객체를 끼울 수도 없다.
+- `Settings` 의 생성자는 무조건 `initializeEditorSyntaxStyles()` → `SyntaxUtilities.getDefaultSyntaxStyles()`
+  를 불러 `new java.awt.Color(...)` 를 만든다. 조건 분기가 없다.
+- `java/awt/Color` 를 참조하는 클래스는 jar 전체에 67개, 그중 GUI(`venus`, `tools`) 밖은
+  `Settings` 와 그 내부 클래스 3개(`ColorProviderMix`, `ColorSettingMix`, `LookAndFeelColor`)다.
+  바이트코드 참조 지점은 `Settings` 30, `SyntaxUtilities` 33, `SyntaxStyle` 11.
+- 설령 `Settings` 를 피해도 두 번째 끌어옴이 있다: 첫 `ecall` 에서 `SyscallLoader` 가 모든 syscall 을
+  만들면서 `javax.sound.midi.*`(역시 java.desktop) 5개를 로드한다(MIDI syscall). GUI 밖에서 java.desktop
+  을 참조하는 syscall 클래스가 12개(`SyscallInputDialog*`, `SyscallMessageDialog*`, `Tone` 등)다.
+
+**결론: 피할 수 없다. zip-9 기준 55.8 MB 를 받아들인다.**

@@ -40,6 +40,7 @@ class Probe:
         ready = self.wait_event("ready")
         self.t_ready = time.perf_counter()
         self.version = ready["rars"]
+        self.protocol = ready.get("protocol")
 
     def _pump(self):
         for line in self.p.stdout:
@@ -81,6 +82,11 @@ class Probe:
                 return m
             self.events.append(m)
 
+    def send_raw(self, line):
+        """Write one raw line (for malformed-request tests)."""
+        self.p.stdin.write(line + "\n")
+        self.p.stdin.flush()
+
     def send(self, cmd, **kw):
         rid = self.next_id
         self.next_id += 1
@@ -98,6 +104,18 @@ class Probe:
         while True:
             m = self._get(deadline, f"reply to id {rid}")
             if m.get("id") == rid:
+                return m
+            self.events.append(m)
+
+    def reply_where(self, pred, timeout=None):
+        """First message (reply or event) matching pred, e.g. a reply whose id is not an int."""
+        deadline = time.perf_counter() + (timeout or self.timeout)
+        for i, m in enumerate(self.events):
+            if pred(m):
+                return self.events.pop(i)
+        while True:
+            m = self._get(deadline, "matching message")
+            if pred(m):
                 return m
             self.events.append(m)
 

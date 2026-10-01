@@ -12,6 +12,20 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 public class RarsProbe {
+    /** Engine protocol version; see docs/engine-protocol.md for what bumps it. */
+    static final int PROTOCOL = 1;
+
+    static String err(String code, String message) {
+        return "\"ok\":false,\"code\":\"" + code + "\",\"error\":" + Json.str(message);
+    }
+
+    /** Echo the request id back with its JSON type intact (number, string or null). */
+    static String idJson(Object id) {
+        if (id == null) return "null";
+        if (id instanceof String) return Json.str((String) id);
+        if (id instanceof Number || id instanceof Boolean) return String.valueOf(id);
+        return "null";
+    }
     // ---- protocol channel: the real fd 1, never touched by RARS ----
     static final PrintStream proto = new PrintStream(new FileOutputStream(FileDescriptor.out), false, StandardCharsets.UTF_8);
 
@@ -97,20 +111,23 @@ public class RarsProbe {
             if (arg instanceof SimulatorNotice && ((SimulatorNotice) arg).getAction() == SimulatorNotice.SIMULATOR_STOP)
                 finish((SimulatorNotice) arg);
         });
-        send("{\"ev\":\"ready\",\"rars\":" + Json.str(Globals.version) + "}");
+        send("{\"ev\":\"ready\",\"protocol\":" + PROTOCOL + ",\"rars\":" + Json.str(Globals.version) + "}");
 
         BufferedReader in = new BufferedReader(new InputStreamReader(new FileInputStream(FileDescriptor.in), StandardCharsets.UTF_8));
         String line;
         while ((line = in.readLine()) != null) {
             if (line.isBlank()) continue;
             Map<String, Object> req;
-            try { req = Json.parse(line); } catch (RuntimeException e) { send("{\"ok\":false,\"error\":" + Json.str("bad json: " + e.getMessage()) + "}"); continue; }
-            Object id = req.getOrDefault("id", 0);
+            try { req = Json.parse(line); } catch (RuntimeException e) { send("{\"id\":null," + err("bad_json", String.valueOf(e.getMessage())) + "}"); continue; }
+            String id = idJson(req.get("id"));
             try {
-                String body = handle((String) req.get("cmd"), req);
+                Object cmd = req.get("cmd");
+                String body = cmd instanceof String ? handle((String) cmd, req) : err("bad_request", "missing or non-string cmd");
                 if (body != null) send("{\"id\":" + id + "," + body + "}");
+            } catch (ClassCastException | NullPointerException e) {
+                send("{\"id\":" + id + "," + err("bad_request", "missing or mistyped parameter: " + e.getMessage()) + "}");
             } catch (Exception e) {
-                send("{\"id\":" + id + ",\"ok\":false,\"error\":" + Json.str(e.toString()) + "}");
+                send("{\"id\":" + id + "," + err("internal", e.toString()) + "}");
             }
             if ("quit".equals(req.get("cmd"))) break;
         }
@@ -118,7 +135,6 @@ public class RarsProbe {
     }
 
     static String handle(String cmd, Map<String, Object> req) throws Exception {
-        if (cmd == null) return "\"ok\":false,\"error\":\"no cmd\"";
         switch (cmd) {
             case "ping": return "\"ok\":true";
             case "input": consoleIn.feed(((String) req.get("text")).getBytes(StandardCharsets.UTF_8)); return "\"ok\":true,\"waiting\":" + consoleIn.waiting;
@@ -129,7 +145,7 @@ public class RarsProbe {
             case "status": return "\"ok\":true,\"busy\":" + busy + ",\"waiting\":" + consoleIn.waiting + ",\"terminated\":" + terminated;
             case "quit": return "\"ok\":true";
         }
-        if (busy) return "\"ok\":false,\"error\":\"busy\"";
+        if (busy) return err("busy", "a step or run is in progress");
         switch (cmd) {
             case "assemble": return assemble((String) req.get("source"));
             case "regs": return "\"ok\":true," + regsJson();
@@ -142,7 +158,7 @@ public class RarsProbe {
             }
             case "backstep": {
                 if (Globals.program == null || Globals.program.getBackStepper() == null || Globals.program.getBackStepper().empty())
-                    return "\"ok\":false,\"error\":\"nothing to undo\"";
+                    return err("nothing_to_undo", "no recorded step to undo");
                 Globals.program.getBackStepper().backStep();
                 terminated = false;
                 return "\"ok\":true," + regsJson();
@@ -151,16 +167,16 @@ public class RarsProbe {
                 // RARS records undo entries for every instruction while the back-stepper is engaged.
                 if (Globals.program != null && Globals.program.getBackStepper() != null)
                     Globals.program.getBackStepper().setEnabled(!Boolean.FALSE.equals(req.get("backstep")));
-                if (terminated) return "\"ok\":false,\"error\":\"not runnable (assemble first or program finished)\"";
+                if (terminated) return err("not_runnable", "assemble first, or the program has finished");
                 int max = "step".equals(cmd) ? 1 : (req.containsKey("max") ? Json.num(req.get("max")) : -1);
-                pending = new Pending(req.getOrDefault("id", 0), "step".equals(cmd));
+                pending = new Pending(idJson(req.get("id")), "step".equals(cmd));
                 consoleIn.uncancel();
                 busy = true;
                 Simulator.getInstance().startSimulation(pending.pcBefore, max, breakpoints);
                 return null; // reply is sent by finish() on the simulator thread
             }
         }
-        return "\"ok\":false,\"error\":" + Json.str("unknown cmd " + cmd);
+        return err("unknown_cmd", "unknown cmd " + cmd);
     }
 
     static String assemble(String source) {
@@ -194,10 +210,21 @@ public class RarsProbe {
                 first = false;
                 sb.append(stmtJson(s));
             }
+            sb.append("],\"symbols\":[");
+            first = true;
+            for (int g = 0; g < 2; g++) {
+                rars.assembler.SymbolTable table = g == 0 ? p.getLocalSymbolTable() : Globals.symbolTable;
+                for (rars.assembler.Symbol sym : table.getAllSymbols()) {
+                    if (!first) sb.append(',');
+                    first = false;
+                    sb.append("{\"name\":").append(Json.str(sym.getName())).append(",\"addr\":").append(sym.getAddress())
+                      .append(",\"segment\":\"").append(sym.getType() ? "data" : "text").append("\",\"global\":").append(g == 1).append('}');
+                }
+            }
             sb.append("],\"pc\":").append(RegisterFile.getProgramCounter());
         } catch (AssemblyException e) {
             sb.setLength(0);
-            sb.append("\"ok\":false,\"errors\":").append(errorsJson(e.errors()));
+            sb.append(err("assemble_error", "assembly failed")).append(",\"errors\":").append(errorsJson(e.errors()));
         }
         return sb.toString();
     }
@@ -251,6 +278,10 @@ public class RarsProbe {
         for (int i = 0; i < 32; i++) sb.append(i == 0 ? "" : ",").append(RegisterFile.getValue(i));
         sb.append("],\"f\":[");
         for (int i = 0; i < 32; i++) sb.append(i == 0 ? "" : ",").append(FloatingPointRegisterFile.getValue(i));
+        // f[] is RARS's single-precision view (NaN unless NaN-boxed); fbits is the raw 64-bit register.
+        sb.append("],\"fbits\":[");
+        for (int i = 0; i < 32; i++)
+            sb.append(i == 0 ? "\"" : ",\"").append(String.format("%016x", FloatingPointRegisterFile.getValueLong(i))).append('"');
         return sb.append(']').toString();
     }
 
@@ -264,7 +295,7 @@ public class RarsProbe {
                 hex.append(HEX[(b >> 4) & 0xf]).append(HEX[b & 0xf]);
             }
         } catch (AddressErrorException e) {
-            return "\"ok\":false,\"error\":" + Json.str(e.getMessage()) + ",\"partial\":\"" + hex + "\"";
+            return err("address", e.getMessage()) + ",\"partial\":\"" + hex + "\"";
         }
         return "\"ok\":true,\"addr\":" + addr + ",\"hex\":\"" + hex + "\"";
     }

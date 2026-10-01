@@ -69,16 +69,33 @@ def check_headless_and_classes():
     return boot
 
 
+def experiment(java, mode):
+    """One DesktopExperiment mode in its own JVM; returns its verdict line."""
+    p = subprocess.run([java, "-Xlog:disable", "-Xlog:all=warning:stderr", "-Djava.awt.headless=true",
+                        "-cp", classpath(), "DesktopExperiment", mode],
+                       capture_output=True, text=True, timeout=60)
+    lines = [l for l in p.stdout.splitlines() if l.startswith(mode + " ")]
+    assert lines, f"no verdict from {mode}: stdout={p.stdout[-500:]!r} stderr={p.stderr[-500:]!r}"
+    return lines[-1]
+
+
 def check_without_java_desktop(jlink_dir):
-    """Run the probe on a runtime that has java.base + java.prefs only."""
-    java = os.path.join(jlink_dir, "bin", "java")
-    p = subprocess.run([java, "-Djava.awt.headless=true", "-cp", classpath(), "RarsProbe"],
-                       input='{"id":1,"cmd":"quit"}\n', capture_output=True, text=True, timeout=30)
-    first_err = next((json.loads(l)["text"] for l in p.stdout.splitlines() if '"err"' in l and "NoClassDefFound" in l), None)
-    ready = '"ready"' in p.stdout
-    record("runs without java.desktop", "no" if not ready else "works",
-           first_err or "started fine")
-    return ready
+    """Can any unmodified entry point run on java.base + java.prefs only?"""
+    java_min = os.path.join(jlink_dir, "bin", "java")
+    if not os.path.isfile(java_min):
+        sys.exit(f"{java_min} missing: run probe/run.sh bench first (it builds the jlink images)")
+    full = {m: experiment("java", m) for m in ("initialize", "api", "skip")}
+    small = {m: experiment(java_min, m) for m in ("initialize", "api", "skip")}
+
+    def all_fail(verdicts):
+        assert all(" FAIL " in v for v in verdicts.values()), verdicts
+    all_fail(small)
+    # positive control: on a full runtime the experiment can succeed, so its failures above mean something
+    must_fail("full runtime runs the normal and api paths", lambda: all_fail({m: full[m] for m in ("initialize", "api")}))
+    for m in ("initialize", "api", "skip"):
+        record(f"without java.desktop: {m} path", "no", small[m])
+    record("skipping Settings, even on a full runtime", "no", full["skip"])
+    return False
 
 
 # ---------------------------------------------------------------- stepping
@@ -172,6 +189,14 @@ def check_state(p):
     assert [x["addr"] for x in t] == [TEXT_BASE + 4 * i for i in range(len(t))]
     assert all({"addr", "code", "basic", "line", "src"} <= x.keys() for x in t)
     record("x0-x31, pc, f0-f31 in one call", "works", f"fadd.s ft1 = {u32(r['f'][1]):#010x} (3.0f)")
+    p.call("assemble", source=".data\nd: .double 1.5\n.text\nla t0, d\nfld ft0, 0(t0)\nli a7, 10\necall\n")
+    for _ in range(3):
+        d = p.call("step")
+    def double_ok(regs):
+        assert regs["fbits"][0] == "3ff8000000000000", regs["fbits"][0]
+    double_ok(d)
+    must_fail("f[] alone cannot show a double", lambda: double_ok({"fbits": [f"{u32(d['f'][0]):016x}"]}))
+    record("double in an f register (fbits)", "works", f"fld 1.5 -> fbits[0]={d['fbits'][0]}, while f[0]={u32(d['f'][0]):#010x} (RARS single view)")
     record("read arbitrary memory range", "works", f"4096 bytes from {DATA_BASE:#x}; unmapped address 0 -> {bad['error']!r}")
     record("text segment listing", "works",
            f"{len(t)} rows with addr/code/basic/line/src, e.g. {t[0]['addr']:#x} {u32(t[0]['code']):#010x} {t[0]['basic']!r} line {t[0]['line']}")
@@ -261,6 +286,35 @@ def _assert_errors(r):
     assert not r["ok"], r
 
 
+# ---------------------------------------------------------------- protocol contract
+
+def check_protocol(p):
+    assert p.protocol == 1, p.protocol
+    # ids keep their JSON type
+    p.send_raw('{"id":"s-1","cmd":"ping"}')
+    r = p.reply_where(lambda m: m.get("id") == "s-1")
+    assert r["ok"], r
+    # every failure carries a machine-readable code
+    p.send_raw("not json")
+    bad = p.reply_where(lambda m: "id" in m and m["id"] is None)
+    codes = {"bad_json": bad.get("code"),
+             "bad_request": p.call("assemble").get("code"),
+             "unknown_cmd": p.call("frob").get("code"),
+             "address": p.call("mem", addr=0, len=1).get("code"),
+             "assemble_error": p.call("assemble", source="addi").get("code"),
+             "not_runnable": p.call("step").get("code")}
+    def codes_match(c):
+        assert all(k == v for k, v in c.items()), c
+    codes_match(codes)
+    must_fail("code check notices a wrong code", lambda: codes_match({**codes, "busy": "bad_request"}))
+    a = p.call("assemble", source=".globl main\n.data\nmsg: .word 1\n.text\nmain: la t0, msg\nloop: j loop\n")
+    sym = {x["name"]: x for x in a["symbols"]}
+    assert sym["msg"]["segment"] == "data" and sym["msg"]["addr"] == DATA_BASE, sym
+    assert sym["main"]["global"] and not sym["loop"]["global"] and sym["loop"]["addr"] == TEXT_BASE + 8, sym
+    record("protocol contract (version, id types, error codes, symbols)", "works",
+           f"protocol={p.protocol}; string id echoed; codes {sorted(codes)}; symbols {sorted(sym)}")
+
+
 # ---------------------------------------------------------------- repetition
 
 def run_output(p, name, stdin=None):
@@ -338,6 +392,7 @@ def main():
     check_state(p)
     check_console(p)
     check_errors(p)
+    check_protocol(p)
     p.close()
     check_repeat(Probe(jvm_args=["-Dprobe.skipStdioReset=true"]))
     os.makedirs(os.path.join(HERE, "results"), exist_ok=True)
