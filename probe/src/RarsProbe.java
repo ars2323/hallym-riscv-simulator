@@ -1,0 +1,376 @@
+// RARS headless probe: one JSON object per line on stdin, one per line on stdout.
+// Uses RARS (unmodified) as a library. See probe/PROTOCOL.md for the command set.
+
+import rars.*;
+import rars.riscv.hardware.*;
+import rars.simulator.Simulator;
+import rars.simulator.SimulatorNotice;
+import rars.util.SystemIO;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+
+public class RarsProbe {
+    // ---- protocol channel: the real fd 1, never touched by RARS ----
+    static final PrintStream proto = new PrintStream(new FileOutputStream(FileDescriptor.out), false, StandardCharsets.UTF_8);
+
+    static synchronized void send(String json) {
+        proto.print(json);
+        proto.print('\n');
+        proto.flush();
+    }
+
+    // ---- console input fed by "input" commands; reports when the program blocks on it ----
+    static final class ConsoleIn extends InputStream {
+        private final ArrayDeque<Byte> buf = new ArrayDeque<>();
+        private boolean cancelled = false;
+        volatile boolean waiting = false;
+
+        synchronized void feed(byte[] b) { for (byte x : b) buf.add(x); notifyAll(); }
+        synchronized void cancel() { cancelled = true; notifyAll(); }
+        synchronized void uncancel() { cancelled = false; }
+        synchronized void clear() { buf.clear(); cancelled = false; }
+
+        @Override public synchronized int read() throws IOException {
+            byte[] one = new byte[1];
+            return read(one, 0, 1) <= 0 ? -1 : (one[0] & 0xff);
+        }
+
+        @Override public synchronized int read(byte[] b, int off, int len) throws IOException {
+            if (len == 0) return 0;
+            if (buf.isEmpty() && !cancelled) {
+                waiting = true;
+                send("{\"ev\":\"input_wanted\",\"pc\":" + RegisterFile.getProgramCounter() + "}");
+                while (buf.isEmpty() && !cancelled) {
+                    try { wait(); } catch (InterruptedException e) { throw new InterruptedIOException(); }
+                }
+                waiting = false;
+            }
+            if (cancelled) { cancelled = false; throw new InterruptedIOException("stopped while waiting for input"); }
+            int n = 0;
+            while (n < len && !buf.isEmpty()) b[off + n++] = buf.poll();
+            return n;
+        }
+        @Override public synchronized int available() { return buf.size(); }
+        @Override public void close() { /* RARS closes stdio on reset; keep ours open */ }
+    }
+
+    // ---- console output: each flush becomes an "out" event ----
+    static final class ConsoleOut extends OutputStream {
+        private final String stream;
+        private final ByteArrayOutputStream pending = new ByteArrayOutputStream();
+        ConsoleOut(String stream) { this.stream = stream; }
+        @Override public synchronized void write(int b) { pending.write(b); }
+        @Override public synchronized void write(byte[] b, int off, int len) { pending.write(b, off, len); }
+        @Override public synchronized void flush() {
+            if (pending.size() == 0) return;
+            String s = pending.toString(StandardCharsets.UTF_8);
+            pending.reset();
+            send("{\"ev\":\"" + stream + "\",\"text\":" + Json.str(s) + "}");
+        }
+        @Override public void close() { flush(); }
+    }
+
+    // RARS closes System.out when a program terminates (SystemIO.resetFiles); keep ours usable.
+    static final class NonClosingPrintStream extends PrintStream {
+        NonClosingPrintStream(OutputStream o) { super(o, true, StandardCharsets.UTF_8); }
+        @Override public void close() { flush(); }
+    }
+
+    static final ConsoleIn consoleIn = new ConsoleIn();
+    static volatile boolean busy = false;
+    static volatile boolean terminated = true;
+    static int[] breakpoints = new int[0];
+
+    public static void main(String[] args) throws Exception {
+        // Every path in RARS that falls back to the process stdio now hits our console streams.
+        System.setIn(consoleIn);
+        System.setOut(new NonClosingPrintStream(new ConsoleOut("out")));
+        System.setErr(new NonClosingPrintStream(new ConsoleOut("err")));
+
+        Globals.initialize();
+        // Unblock a program waiting for console input when Stop is requested.
+        Simulator.getInstance().addStopListener(s -> consoleIn.cancel());
+        // Same completion path the GUI uses: Simulator posts SIMULATOR_STOP to its observers.
+        Simulator.getInstance().addObserver((o, arg) -> {
+            if (arg instanceof SimulatorNotice && ((SimulatorNotice) arg).getAction() == SimulatorNotice.SIMULATOR_STOP)
+                finish((SimulatorNotice) arg);
+        });
+        send("{\"ev\":\"ready\",\"rars\":" + Json.str(Globals.version) + "}");
+
+        BufferedReader in = new BufferedReader(new InputStreamReader(new FileInputStream(FileDescriptor.in), StandardCharsets.UTF_8));
+        String line;
+        while ((line = in.readLine()) != null) {
+            if (line.isBlank()) continue;
+            Map<String, Object> req;
+            try { req = Json.parse(line); } catch (RuntimeException e) { send("{\"ok\":false,\"error\":" + Json.str("bad json: " + e.getMessage()) + "}"); continue; }
+            Object id = req.getOrDefault("id", 0);
+            try {
+                String body = handle((String) req.get("cmd"), req);
+                if (body != null) send("{\"id\":" + id + "," + body + "}");
+            } catch (Exception e) {
+                send("{\"id\":" + id + ",\"ok\":false,\"error\":" + Json.str(e.toString()) + "}");
+            }
+            if ("quit".equals(req.get("cmd"))) break;
+        }
+        System.exit(0);
+    }
+
+    static String handle(String cmd, Map<String, Object> req) throws Exception {
+        if (cmd == null) return "\"ok\":false,\"error\":\"no cmd\"";
+        switch (cmd) {
+            case "ping": return "\"ok\":true";
+            case "input": consoleIn.feed(((String) req.get("text")).getBytes(StandardCharsets.UTF_8)); return "\"ok\":true,\"waiting\":" + consoleIn.waiting;
+            case "stop":
+                // RARS keeps a stale thread reference after a run ends; only stop a live run.
+                if (busy) Simulator.getInstance().stopExecution();
+                return "\"ok\":true,\"was_running\":" + busy;
+            case "status": return "\"ok\":true,\"busy\":" + busy + ",\"waiting\":" + consoleIn.waiting + ",\"terminated\":" + terminated;
+            case "quit": return "\"ok\":true";
+        }
+        if (busy) return "\"ok\":false,\"error\":\"busy\"";
+        switch (cmd) {
+            case "assemble": return assemble((String) req.get("source"));
+            case "regs": return "\"ok\":true," + regsJson();
+            case "mem": return mem(Json.num(req.get("addr")), Json.num(req.get("len")));
+            case "bp": {
+                List<?> l = (List<?>) req.get("set");
+                breakpoints = new int[l.size()];
+                for (int i = 0; i < l.size(); i++) breakpoints[i] = Json.num(l.get(i));
+                return "\"ok\":true,\"count\":" + breakpoints.length;
+            }
+            case "backstep": {
+                if (Globals.program == null || Globals.program.getBackStepper() == null || Globals.program.getBackStepper().empty())
+                    return "\"ok\":false,\"error\":\"nothing to undo\"";
+                Globals.program.getBackStepper().backStep();
+                terminated = false;
+                return "\"ok\":true," + regsJson();
+            }
+            case "step": case "run": {
+                // RARS records undo entries for every instruction while the back-stepper is engaged.
+                if (Globals.program != null && Globals.program.getBackStepper() != null)
+                    Globals.program.getBackStepper().setEnabled(!Boolean.FALSE.equals(req.get("backstep")));
+                if (terminated) return "\"ok\":false,\"error\":\"not runnable (assemble first or program finished)\"";
+                int max = "step".equals(cmd) ? 1 : (req.containsKey("max") ? Json.num(req.get("max")) : -1);
+                pending = new Pending(req.getOrDefault("id", 0), "step".equals(cmd));
+                consoleIn.uncancel();
+                busy = true;
+                Simulator.getInstance().startSimulation(pending.pcBefore, max, breakpoints);
+                return null; // reply is sent by finish() on the simulator thread
+            }
+        }
+        return "\"ok\":false,\"error\":" + Json.str("unknown cmd " + cmd);
+    }
+
+    static String assemble(String source) {
+        RISCVprogram p = new RISCVprogram();
+        Globals.program = p;
+        terminated = true;
+        StringBuilder sb = new StringBuilder();
+        try {
+            p.fromString(source);
+            p.tokenize();
+            ArrayList<RISCVprogram> list = new ArrayList<>();
+            list.add(p);
+            ErrorList warnings = p.assemble(list, true, false);
+            RegisterFile.resetRegisters();
+            FloatingPointRegisterFile.resetRegisters();
+            ControlAndStatusRegisterFile.resetRegisters();
+            InterruptController.reset();
+            RegisterFile.initializeProgramCounter(false);
+            Globals.exitCode = 0;
+            // Fresh stdio table: drops any half-read console line the previous run left behind.
+            if (!Boolean.getBoolean("probe.skipStdioReset")) { // the switch exists only as a negative control for checks.py
+                consoleIn.clear();
+                SystemIO.swapData(new SystemIO.Data(true));
+            }
+            terminated = false;
+            sb.append("\"ok\":true,\"warnings\":").append(errorsJson(warnings));
+            sb.append(",\"text\":[");
+            boolean first = true;
+            for (ProgramStatement s : p.getMachineList()) {
+                if (!first) sb.append(',');
+                first = false;
+                sb.append(stmtJson(s));
+            }
+            sb.append("],\"pc\":").append(RegisterFile.getProgramCounter());
+        } catch (AssemblyException e) {
+            sb.setLength(0);
+            sb.append("\"ok\":false,\"errors\":").append(errorsJson(e.errors()));
+        }
+        return sb.toString();
+    }
+
+    static final class Pending {
+        final Object id;
+        final boolean isStep;
+        final int pcBefore = RegisterFile.getProgramCounter();
+        final long instret0 = ControlAndStatusRegisterFile.getValueNoNotify("instret");
+        final long t0 = System.nanoTime();
+        Pending(Object id, boolean isStep) { this.id = id; this.isStep = isStep; }
+    }
+    static volatile Pending pending;
+
+    static void finish(SimulatorNotice n) {
+        Pending pd = pending;
+        pending = null;
+        if (pd == null) return;
+        System.out.flush();
+        StringBuilder sb = new StringBuilder("{\"id\":" + pd.id + ",\"ok\":true");
+        Simulator.Reason r = n.getReason();
+        sb.append(",\"reason\":\"").append(r).append('"');
+        SimulationException e = n.getException();
+        if (n.getDone()) {
+            terminated = true;
+            sb.append(",\"exit\":").append(Globals.exitCode);
+        }
+        if (e != null) {
+            ErrorMessage m = e.error();
+            sb.append(",\"cause\":").append(e.cause())
+              .append(",\"message\":").append(Json.str(m == null ? String.valueOf(e) : m.getMessage()))
+              .append(",\"line\":").append(m == null ? 0 : m.getLine());
+        }
+        long steps = ControlAndStatusRegisterFile.getValueNoNotify("instret") - pd.instret0;
+        sb.append(",\"steps\":").append(steps).append(",\"ns\":").append(System.nanoTime() - pd.t0);
+        if (pd.isStep) {
+            try {
+                ProgramStatement s = Globals.memory.getStatementNoNotify(pd.pcBefore);
+                sb.append(",\"executed\":").append(s == null ? "null" : stmtJson(s));
+            } catch (AddressErrorException ae) {
+                sb.append(",\"executed\":null");
+            }
+        }
+        sb.append(',').append(regsJson()).append('}');
+        busy = false;
+        send(sb.toString());
+    }
+
+    static String regsJson() {
+        StringBuilder sb = new StringBuilder("\"pc\":").append(RegisterFile.getProgramCounter()).append(",\"x\":[");
+        for (int i = 0; i < 32; i++) sb.append(i == 0 ? "" : ",").append(RegisterFile.getValue(i));
+        sb.append("],\"f\":[");
+        for (int i = 0; i < 32; i++) sb.append(i == 0 ? "" : ",").append(FloatingPointRegisterFile.getValue(i));
+        return sb.append(']').toString();
+    }
+
+    static final char[] HEX = "0123456789abcdef".toCharArray();
+
+    static String mem(int addr, int len) {
+        StringBuilder hex = new StringBuilder(len * 2);
+        try {
+            for (int a = addr; a < addr + len; a++) {
+                int b = Globals.memory.getByte(a);
+                hex.append(HEX[(b >> 4) & 0xf]).append(HEX[b & 0xf]);
+            }
+        } catch (AddressErrorException e) {
+            return "\"ok\":false,\"error\":" + Json.str(e.getMessage()) + ",\"partial\":\"" + hex + "\"";
+        }
+        return "\"ok\":true,\"addr\":" + addr + ",\"hex\":\"" + hex + "\"";
+    }
+
+    static String stmtJson(ProgramStatement s) {
+        return "{\"addr\":" + s.getAddress() + ",\"code\":" + s.getBinaryStatement()
+                + ",\"basic\":" + Json.str(s.getPrintableBasicAssemblyStatement())
+                + ",\"line\":" + s.getSourceLine() + ",\"src\":" + Json.str(s.getSource()) + "}";
+    }
+
+    static String errorsJson(ErrorList list) {
+        StringBuilder sb = new StringBuilder("[");
+        boolean first = true;
+        for (ErrorMessage m : list.getErrorMessages()) {
+            if (!first) sb.append(',');
+            first = false;
+            sb.append("{\"line\":").append(m.getLine()).append(",\"col\":").append(m.getPosition())
+              .append(",\"warning\":").append(m.isWarning())
+              .append(",\"message\":").append(Json.str(m.getMessage())).append('}');
+        }
+        return sb.append(']').toString();
+    }
+
+    // ---- minimal JSON: flat objects of strings, numbers, booleans and number arrays ----
+    static final class Json {
+        static String str(String s) {
+            if (s == null) return "null";
+            StringBuilder sb = new StringBuilder("\"");
+            for (char c : s.toCharArray()) {
+                switch (c) {
+                    case '"': sb.append("\\\""); break;
+                    case '\\': sb.append("\\\\"); break;
+                    case '\n': sb.append("\\n"); break;
+                    case '\r': sb.append("\\r"); break;
+                    case '\t': sb.append("\\t"); break;
+                    default: if (c < 0x20) sb.append(String.format("\\u%04x", (int) c)); else sb.append(c);
+                }
+            }
+            return sb.append('"').toString();
+        }
+
+        static int num(Object o) { return (int) ((Number) o).longValue(); }
+
+        static Map<String, Object> parse(String s) {
+            int[] i = {0};
+            Object v = value(s, i);
+            if (!(v instanceof Map)) throw new RuntimeException("expected object");
+            @SuppressWarnings("unchecked") Map<String, Object> m = (Map<String, Object>) v;
+            return m;
+        }
+
+        private static void ws(String s, int[] i) { while (i[0] < s.length() && Character.isWhitespace(s.charAt(i[0]))) i[0]++; }
+
+        private static Object value(String s, int[] i) {
+            ws(s, i);
+            char c = s.charAt(i[0]);
+            if (c == '{') {
+                Map<String, Object> m = new HashMap<>();
+                i[0]++; ws(s, i);
+                if (s.charAt(i[0]) == '}') { i[0]++; return m; }
+                while (true) {
+                    ws(s, i);
+                    String k = (String) value(s, i);
+                    ws(s, i); i[0]++; // ':'
+                    m.put(k, value(s, i));
+                    ws(s, i);
+                    if (s.charAt(i[0]++) == '}') return m;
+                }
+            }
+            if (c == '[') {
+                List<Object> l = new ArrayList<>();
+                i[0]++; ws(s, i);
+                if (s.charAt(i[0]) == ']') { i[0]++; return l; }
+                while (true) {
+                    l.add(value(s, i));
+                    ws(s, i);
+                    if (s.charAt(i[0]++) == ']') return l;
+                }
+            }
+            if (c == '"') {
+                StringBuilder sb = new StringBuilder();
+                i[0]++;
+                while (true) {
+                    char d = s.charAt(i[0]++);
+                    if (d == '"') return sb.toString();
+                    if (d != '\\') { sb.append(d); continue; }
+                    char e = s.charAt(i[0]++);
+                    switch (e) {
+                        case 'n': sb.append('\n'); break;
+                        case 't': sb.append('\t'); break;
+                        case 'r': sb.append('\r'); break;
+                        case 'b': sb.append('\b'); break;
+                        case 'f': sb.append('\f'); break;
+                        case 'u': sb.append((char) Integer.parseInt(s.substring(i[0], i[0] + 4), 16)); i[0] += 4; break;
+                        default: sb.append(e);
+                    }
+                }
+            }
+            if (s.startsWith("true", i[0])) { i[0] += 4; return Boolean.TRUE; }
+            if (s.startsWith("false", i[0])) { i[0] += 5; return Boolean.FALSE; }
+            if (s.startsWith("null", i[0])) { i[0] += 4; return null; }
+            int st = i[0];
+            while (i[0] < s.length() && "+-0123456789.eE".indexOf(s.charAt(i[0])) >= 0) i[0]++;
+            String n = s.substring(st, i[0]);
+            if (n.isEmpty()) throw new RuntimeException("unexpected '" + c + "' at " + st);
+            return n.contains(".") || n.contains("e") || n.contains("E") ? (Object) Double.parseDouble(n) : (Object) Long.parseLong(n);
+        }
+    }
+}

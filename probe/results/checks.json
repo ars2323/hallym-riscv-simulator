@@ -1,0 +1,102 @@
+[
+ {
+  "check": "RARS version reported by Globals.version",
+  "verdict": "info",
+  "evidence": "1.6"
+ },
+ {
+  "check": "java.desktop classes loaded: start-up only",
+  "verdict": "info",
+  "evidence": "13: java.awt.Color, java.awt.GraphicsEnvironment, java.awt.Paint, java.awt.Toolkit, java.awt.Toolkit$1, java.awt.Toolkit$2, java.awt.Toolkit$3, java.awt.Toolkit$4, java.awt.Transparency, javax.swing.filechooser.FileFilter, sun.awt.AWTAccessor, sun.awt.AWTAccessor$ToolkitAccessor, sun.awt.resources.awt"
+ },
+ {
+  "check": "java.desktop classes added by assemble",
+  "verdict": "info",
+  "evidence": "0: []"
+ },
+ {
+  "check": "java.desktop classes added by run",
+  "verdict": "info",
+  "evidence": "5: ['javax.sound.midi.InvalidMidiDataException', 'javax.sound.midi.MetaEventListener', 'javax.sound.midi.MidiMessage', 'javax.sound.midi.MidiUnavailableException', 'javax.sound.midi.ShortMessage']"
+ },
+ {
+  "check": "no window/peer classes (JFrame, Window, X11) loaded",
+  "verdict": "works",
+  "evidence": "none in start-up+assemble+run"
+ },
+ {
+  "check": "runs without java.desktop",
+  "verdict": "no",
+  "evidence": "java.lang.NoClassDefFoundError: java/awt/Color"
+ },
+ {
+  "check": "step exactly one instruction",
+  "verdict": "works",
+  "evidence": "pc 0x400000->0x400004, executed 'auipc x10,0x0000fc10' code=0x0fc10517 line 5"
+ },
+ {
+  "check": "breakpoint set/clear without GUI",
+  "verdict": "works",
+  "evidence": "run stopped at 0x400010 (BREAKPOINT), cleared, then ran to NORMAL_TERMINATION"
+ },
+ {
+  "check": "stop a running program",
+  "verdict": "works",
+  "evidence": "reply 1.0 ms after stop, 153957 instructions ran, stepping resumes afterwards"
+ },
+ {
+  "check": "undo one step (RARS back-stepper)",
+  "verdict": "works",
+  "evidence": "after 3 steps pc=0x40000c, backstep -> pc=0x400008, regs equal step 2"
+ },
+ {
+  "check": "x0-x31, pc, f0-f31 in one call",
+  "verdict": "works",
+  "evidence": "fadd.s ft1 = 0x40400000 (3.0f)"
+ },
+ {
+  "check": "read arbitrary memory range",
+  "verdict": "works",
+  "evidence": "4096 bytes from 0x10010000; unmapped address 0 -> 'address out of range 0x00000000'"
+ },
+ {
+  "check": "text segment listing",
+  "verdict": "works",
+  "evidence": "9 rows with addr/code/basic/line/src, e.g. 0x400000 0x0fc10517 'auipc x10,0x0000fc10' line 5"
+ },
+ {
+  "check": "feed console input from outside",
+  "verdict": "works",
+  "evidence": "input_wanted at pc=0x400008, status waiting=true, fed '21' -> printed '42\\n'"
+ },
+ {
+  "check": "step into ReadInt",
+  "verdict": "messy",
+  "evidence": "step reply is withheld until input arrives (the step blocks; an input_wanted event says why)"
+ },
+ {
+  "check": "stop while waiting for input",
+  "verdict": "messy",
+  "evidence": "STOP returns, but RARS completes the ecall with its default input '0' (a0 77->0, pc past ecall); one backstep restores a0=77 and pc=ecall, and the next step asks for input again"
+ },
+ {
+  "check": "structured assemble errors, several at once",
+  "verdict": "works",
+  "evidence": "L3:C9 \"addi\": Too few or incorrectly formatted operands. Expected: addi t1,t2,-100; L4:C14 \"t9\": operand is of incorrect type; L6:C9 \"bogus\" is not a recognized operator"
+ },
+ {
+  "check": "runtime error report",
+  "verdict": "works",
+  "evidence": "reason=EXCEPTION cause=4 line=6 'Runtime exception at 0x00400008: Load address not aligned to word boundary 0x10010001'"
+ },
+ {
+  "check": "re-assemble in one JVM leaves no data/heap/symbol residue",
+  "verdict": "works",
+  "evidence": "fresh JVM clean.s -> '0 0 268697600'; same JVM after dirty.s x51 -> '0 0 268697600'; label from previous program not visible ('Symbol \"buf\" not found in symbol table.')"
+ },
+ {
+  "check": "leftover console input does not leak across re-assemble",
+  "verdict": "works",
+  "evidence": "fed '1\\n2\\n', re-assembled, next run asked for input again"
+ }
+]
