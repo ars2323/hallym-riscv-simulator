@@ -97,6 +97,8 @@ async function checkStep(page: Page, n: number, phase = 0, result = false): Prom
   if (s.targets.length) {
     const t = s.targets[0], c = s.card!;
     const apartBy = Math.hypot(Math.max(0, t.left - c.right, c.left - t.right), Math.max(0, t.top - c.bottom, c.top - t.bottom));
+    const w0 = await page.evaluate(() => window.innerWidth);
+    console.log(`card-distance ${w0} ${n}${phase ? `.${phase}` : ''}${result ? 'r' : ''} ${Math.round(apartBy)}`);
     expect(apartBy, `${where}: the card ${Math.round(apartBy)} px from its target ${JSON.stringify({ t, c })}`).toBeLessThanOrEqual(NEAR);
   }
   expect(light.areaLit, `${where}: each target's panel lit whole`).toEqual(s.targets.map(() => true));
@@ -178,7 +180,7 @@ async function walk(page: Page, how: 'do' | 'skip'): Promise<void> {
     if (n === 9) {
       // A ring for each field, none fused with its neighbour.
       const rings = await page.locator('.tut-ring').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().toJSON() as DOMRect));
-      expect(rings.length).toBe(5);
+      expect(rings.length).toBe(7); // funct7 rs2 rs1 funct3 rd opcode, and the Encoding
       for (let i = 0; i < rings.length; i += 1) {
         for (let j = i + 1; j < rings.length; j += 1) {
           const [a, b] = [rings[i], rings[j]];
@@ -344,7 +346,7 @@ test.describe(() => {
     await page.getByRole('button', { name: /바로 시작/ }).click();
     await page.getByRole('button', { name: /새 파일/ }).first().click();
     await page.locator('.cm-content').click();
-    await page.keyboard.insertText('main:\n    li $t0, 1\n');
+    await page.keyboard.insertText('main:\n    li t0, 1\n');
     await page.getByTitle('Tutorial').click();
     const ask = page.locator('dialog.ask');
     await expect(ask).toContainText('저장하지 않은 변경이 있습니다');
@@ -356,7 +358,7 @@ test.describe(() => {
     await expect.poll(() => active(page)).toBe(false);
     await expect(page.locator('.titlebar .file')).toContainText('untitled.s');
     await expect(page.locator('.titlebar .dirty')).toHaveCount(1);
-    expect(await page.locator('.cm-content').innerText()).toContain('li $t0, 1');
+    expect(await page.locator('.cm-content').innerText()).toContain('li t0, 1');
   });
 });
 

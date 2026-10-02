@@ -525,13 +525,16 @@ function targetRects(targets: Target[]): { list: Rect[]; owners: Element[]; miss
 
 // ---- the twenty-one steps ------------------------------------------------------------
 
-const ADD = /^\s+add\s+\$t3/;
-const SUB = /^\s+sub\s+\$t4/;
-const BIG = /li\s+\$t0, 0x12345678/;
-const SW = /^\s+sw\s+\$t3, total/;
-const LW = /^\s+lw\s+\$s0, total/;
-const PRINT = /^\s+li\s+\$v0, 4\b/;
-const OUT_SYSCALL = /^\s+la\s+\$a0, msg/;   // the syscall after it prints msg
+const ADD = /^\s+add\s+t3, t1, t2/;
+const SUB = /^\s+sub\s+t4/;
+const BIG = /li\s+t0, 0x12345678/;
+const SW = /^\s+sw\s+t3, 0\(a1\)/;
+const LW = /^\s+lw\s+s0, 0\(a1\)/;
+const PRINT = /^\s+li\s+a7, 4\b/;
+const OUT_SYSCALL = /^\s+la\s+a0, msg/;   // the ecall after it prints msg
+// The registers by their key in the Registers panel (x0..x31): t3 is x28, sp is x2, t0 is x5.
+const T3 = 'x28';
+const SP = 'x2';
 const trow = (addr: number) => $(`.trow[data-addr="0x${(addr >>> 0).toString(16).padStart(8, '0')}"]`);
 const regCells = (key: string) => ['.hex', '.dec', '.bin'].map((c) => $(`.rrow[data-reg="${key}"] ${c}`));
 const button = (name: string) => $(`[data-tut="${name}"]`);
@@ -584,14 +587,14 @@ export const STEPS: Step[] = [
     done: (_t, s) => (s.kind === 'assembled' && s.ok ? 'next' : null),
     skip: async (t) => { await t.host.assemble(); } },
   { kind: 'explain', file: 'tutorial.s', view: 'run',
-    title: () => 'Registers 패널',
-    body: () => 'MIPS 레지스터 32개가 쓰임새대로 묶여 있습니다. 표시한 Temporaries 묶음은 계산하는 동안 값을 잠시 두는 레지스터들입니다.',
-    targets: () => [$('.regs .phead'), $$('.rgroup').find((g) => g.textContent?.includes('Temporaries'))],
+    title: () => 'Registers 패널: 이름이 둘씩',
+    body: () => '레지스터마다 이름이 둘입니다. 표시한 `x5 t0` 줄처럼 번호 이름(`x5`)과 쓰임새 이름(`t0`)이 같은 레지스터이고, 코드에는 어느 쪽을 써도 같은 명령이 됩니다. 이 줄이 든 Temporaries 묶음은 계산하는 동안 값을 잠시 두는 레지스터들입니다.',
+    targets: () => [$('.rrow[data-reg="x5"]'), $$('.rgroup').find((g) => g.textContent?.includes('Temporaries'))],
     prepare: async (t) => { if (!t.host.assembled()) await t.host.assemble(); },
-    reveal: () => scrollIn($$('.rgroup').find((g) => g.textContent?.includes('Temporaries')) ?? null) },
+    reveal: () => scrollIn($('.rrow[data-reg="x5"]')) },
   { kind: 'explain', file: 'tutorial.s', view: 'run', tab: 'text',
     title: () => '소스 한 줄이 명령 두 개가 되었습니다',
-    body: () => '`li $t0, 0x12345678` → `lui`(위 16비트) + `ori`(아래 16비트). 명령 하나에는 32비트 상수가 다 들어가지 않아서, 어셈블러가 두 명령으로 나누었습니다.',
+    body: () => '`li t0, 0x12345678` → `lui`(위 20비트) + `addi`(아래 12비트). 명령 하나에는 32비트 상수가 다 들어가지 않아서, 어셈블러가 두 명령으로 나누었습니다.',
     // Both ends of it: the Editor's line and the two Text rows (a narrow
     // window shows one side: the rows).
     targets: (t) => [...(t.host.narrow() ? [] : [lines(t, t.line(BIG))]), trow(t.addr(BIG)), trow(t.addr(BIG) + 4)],
@@ -600,7 +603,7 @@ export const STEPS: Step[] = [
   // ---- one line at a time
   { kind: 'practice', file: 'tutorial.s', view: 'editor', keys: ['F10'],
     title: () => 'Step: 한 줄 실행',
-    body: () => '파란 줄이 다음에 실행할 줄입니다. 시작 코드와 앞의 `li` 두 줄은 미리 실행해 두었습니다. F10 키(또는 Step 버튼)를 눌러 이 줄을 실행해 보세요. 실행하면 무엇이 바뀌었는지 짚어 드립니다.',
+    body: () => '파란 줄이 다음에 실행할 줄입니다. RISC-V 프로그램은 시작 코드 없이 `main` 첫 줄에서 바로 시작하는데, 앞의 `li` 두 줄은 미리 실행해 두었습니다. F10 키(또는 Step 버튼)를 눌러 이 줄을 실행해 보세요. 실행하면 무엇이 바뀌었는지 짚어 드립니다.',
     targets: (t) => [button('step'), lines(t, t.line(ADD))],
     prepare: async (t) => {
       if (!t.host.assembled()) await t.host.assemble();
@@ -611,25 +614,25 @@ export const STEPS: Step[] = [
     done: (_t, s) => (s.kind === 'stopped' ? 'next' : null),
     result: { view: 'run',
       title: () => '한 줄을 실행했습니다',
-      body: () => '파란 줄이 다음 줄로 내려갔고, 오른쪽 Registers 패널에서 `$t3` 레지스터가 노란 줄이 되었습니다.',
-      targets: (t) => [$('.rrow[data-reg="$t3"]'), ...(t.host.narrow() ? [] : [$('.editor-panel .cm-pc-line')])],
-      reveal: (t) => t.host.revealRegister('$t3') },
+      body: () => '파란 줄이 다음 줄로 내려갔고, 오른쪽 Registers 패널에서 `x28 t3` 줄이 노란 줄이 되었습니다.',
+      targets: (t) => [$(`.rrow[data-reg="${T3}"]`), ...(t.host.narrow() ? [] : [$('.editor-panel .cm-pc-line')])],
+      reveal: (t) => t.host.revealRegister(T3) },
     skip: async (t) => { await t.host.step(); } },
   { kind: 'explain', file: 'tutorial.s', view: 'run',
     title: () => '노란 줄: 방금 바뀐 레지스터',
-    body: () => '노란 줄은 방금 실행한 줄이 바꾼 레지스터입니다. `add $t3, $t1, $t2` 명령이 두 값을 더한 결과(5 + 7 = 12)를 `$t3` 레지스터에 넣었습니다.',
-    targets: () => [$('.rrow[data-reg="$t3"]')],
+    body: () => '노란 줄은 방금 실행한 줄이 바꾼 레지스터입니다. `add t3, t1, t2` 명령이 두 값을 더한 결과(5 + 7 = 12)를 `t3` 레지스터, 번호로는 `x28` 레지스터에 넣었습니다.',
+    targets: () => [$(`.rrow[data-reg="${T3}"]`)],
     prepare: async (t) => { await t.atLeast(SUB); },
-    reveal: (t) => t.host.revealRegister('$t3') },
+    reveal: (t) => t.host.revealRegister(T3) },
   { kind: 'explain', file: 'tutorial.s', view: 'run',
     title: () => '같은 값의 세 얼굴',
     body: () => 'Hex = 16진수, Dec = 10진수, Bin = 2진수. 셋 모두 같은 값 12입니다. 2진수는 읽기 쉽게 네 자리씩 띄어 두었습니다.',
-    targets: () => regCells('$t3'),
+    targets: () => regCells(T3),
     prepare: async (t) => { await t.atLeast(SUB); t.column('regs', 'dec'); t.column('regs', 'bin'); },
-    reveal: (t) => t.host.revealRegister('$t3') },
+    reveal: (t) => t.host.revealRegister(T3) },
   { kind: 'explain', file: 'tutorial.s', view: 'run', tab: 'text',
     title: () => 'Inspector 패널: 방금 그 명령의 32비트',
-    body: () => '방금 실행한 `add` 명령을 32비트로 나누어 보여 줍니다. 필드마다 이름과 값, 뜻이 적혀 있습니다.',
+    body: () => '방금 실행한 `add` 명령을 32비트로 나누어 보여 줍니다. 레지스터끼리 계산하는 R 형식이라 `funct7` · `rs2` · `rs1` · `funct3` · `rd` · `opcode` 여섯 필드로 나뉘고, 필드마다 이름과 값, 뜻이 적혀 있습니다. 즉시값이 있는 다른 형식의 명령에서는 그 아래에 흩어진 즉시값 조각을 모은 줄이 하나 더 나옵니다.',
     targets: () => [$('.insp .phead'), $('.insp .ihead'), $('.insp .bitgrid')],
     prepare: async (t) => { await t.atLeast(SUB); t.host.pin(t.addr(ADD)); },
     leave: async (t) => { if (t.index !== 8) t.host.pin(null); } },
@@ -638,9 +641,9 @@ export const STEPS: Step[] = [
     body: (t) => {
       const word = document.querySelector('.trow.sel .word')?.textContent ?? '';
       void t;
-      return `opcode · rs · rt · rd … 칸의 0과 1을 왼쪽부터 이어 붙이면 32비트 워드 하나입니다. 이것을 16진수로 쓴 것이 Text 탭 Encoding 열의 \`${word}\` — 같은 명령, 같은 값입니다.`;
+      return `funct7 · rs2 · rs1 · funct3 · rd · opcode 칸의 0과 1을 왼쪽부터 이어 붙이면 32비트 워드 하나입니다. 이것을 16진수로 쓴 것이 Text 탭 Encoding 열의 \`${word}\` — 같은 명령, 같은 값입니다.`;
     },
-    targets: () => [...['opcode', 'rs', 'rt', 'rd'].map((f) => $(`.insp .fbox.f-${f}`)), $('.trow.sel .word')],
+    targets: () => [...['funct7', 'rs2', 'rs1', 'funct3', 'rd', 'opcode'].map((f) => $(`.insp .fbox.f-${f}`)), $('.trow.sel .word')],
     prepare: async (t) => { await t.atLeast(SUB); t.host.pin(t.addr(ADD)); t.column('text', 'word'); },
     reveal: (t) => t.host.revealAddr(t.addr(ADD)),
     leave: async (t) => { if (t.index !== 7) t.host.pin(null); } },
@@ -660,7 +663,7 @@ export const STEPS: Step[] = [
     reveal: () => scrollIn(msgTags()) },
   { kind: 'practice', file: 'tutorial.s', view: 'run', tab: 'data', keys: ['F10'],
     title: () => 'sw: 메모리에 쓰기',
-    body: (t) => `${t.host.narrow() ? '' : '왼쪽에 표시한 '}\`sw $t3, total\` 줄은 \`$t3\` 레지스터의 값을 메모리의 \`total\` 자리에 씁니다. F10 키를 몇 번 눌러 이 줄까지 실행해 보세요. 실행하고 나면 \`total\` 자리가 어떻게 바뀌었는지 보여 드립니다.`,
+    body: (t) => `${t.host.narrow() ? '' : '왼쪽에 표시한 '}\`sw t3, 0(a1)\` 줄은 \`t3\` 레지스터의 값을 \`a1\` 레지스터가 가리키는 곳, 곧 메모리의 \`total\` 자리에 씁니다(바로 앞의 \`la a1, total\` 줄이 그 주소를 \`a1\` 레지스터에 넣었습니다). F10 키를 몇 번 눌러 이 줄까지 실행해 보세요. 실행하고 나면 \`total\` 자리가 어떻게 바뀌었는지 보여 드립니다.`,
     targets: (t) => [...(t.host.narrow() ? [] : [lines(t, t.line(SW))]), dataCell(t)],
     prepare: async (t) => {
       await t.atLeast(SUB);
@@ -670,16 +673,16 @@ export const STEPS: Step[] = [
     done: (t, s) => (s.kind === 'stopped' && ((t.host.pc() ?? 0) >= t.addr(LW) || t.host.finished()) ? 'next' : null),
     result: { view: 'run', tab: 'data',
       title: () => '메모리에 썼습니다',
-      body: () => '`sw` 명령이 `$t3` 레지스터의 값 12 를 `total` 자리에 썼습니다. 표시한 칸이 0 에서 12 로 바뀌었습니다(16진수 0000000c).',
+      body: () => '`sw` 명령이 `t3` 레지스터의 값 12 를 `total` 자리에 썼습니다. 표시한 칸이 0 에서 12 로 바뀌었습니다(16진수 0000000c).',
       targets: (t) => [dataCell(t)],
       reveal: (t) => scrollIn(dataCell(t)) },
     skip: async (t) => { await t.host.runUntil(t.addr(LW)); } },
   { kind: 'explain', file: 'tutorial.s', view: 'run', tab: 'data',
     title: () => '스택은 어디에 있나',
-    body: () => '`$sp` 레지스터가 스택의 맨 위(가장 낮은 주소)를 가리킵니다. 조금 전 `addi $sp, $sp, -4` 줄이 한 칸(4바이트)을 만들어서 `$sp` 값이 4 줄었습니다. 스택은 낮은 주소 쪽으로 자랍니다.',
-    targets: () => [$('.dsec-stack'), $('.rrow[data-reg="$sp"]')],
+    body: () => '`sp` 레지스터(번호로는 `x2` 레지스터)가 스택의 맨 위(가장 낮은 주소)를 가리킵니다. 조금 전 `addi sp, sp, -4` 줄이 한 칸(4바이트)을 만들어서 `sp` 값이 4 줄었습니다. 스택은 낮은 주소 쪽으로 자랍니다.',
+    targets: () => [$('.dsec-stack'), $(`.rrow[data-reg="${SP}"]`)],
     prepare: async (t) => { await t.atLeast(LW); },
-    reveal: (t) => { scrollIn($('.dsec-stack')); t.host.revealRegister('$sp'); } },
+    reveal: (t) => { scrollIn($('.dsec-stack')); t.host.revealRegister(SP); } },
   // ---- control
   { kind: 'practice', file: 'tutorial.s', view: 'editor',
     title: (t) => `브레이크포인트: ${t.line(PRINT)}행에서 멈추게`,
@@ -726,21 +729,21 @@ export const STEPS: Step[] = [
     done: (_t, s) => (s.kind === 'reset' ? 'next' : null),
     result: { view: 'run',
       title: () => '처음으로 돌아왔습니다',
-      body: () => '`$t3` 레지스터가 다시 0 이 되었습니다. 프로그램이 처음 상태로 돌아가서, F10 키나 F5 키로 처음부터 다시 실행할 수 있습니다. 찍어 둔 빨간 점은 그대로 남아 있습니다.',
-      targets: () => [$('.rrow[data-reg="$t3"]'), status()],
-      reveal: (t) => t.host.revealRegister('$t3') },
+      body: () => '`t3` 레지스터가 다시 0 이 되었고, 파란 줄은 `main` 첫 줄로 돌아갔습니다. F10 키나 F5 키로 처음부터 다시 실행할 수 있습니다. 찍어 둔 빨간 점은 그대로 남아 있습니다.',
+      targets: () => [$(`.rrow[data-reg="${T3}"]`), status()],
+      reveal: (t) => t.host.revealRegister(T3) },
     skip: async (t) => { await t.host.restart(); } },
   // ---- input, output, errors
   { kind: 'practice', file: 'tutorial.s', view: 'run', keys: ['F5'],
     title: () => '출력은 Console 패널에',
-    body: (t) => `${t.host.narrow() ? '' : `${t.line(OUT_SYSCALL) + 1}행의 \`syscall\` 줄이 문자열을 출력합니다(\`$v0\` 값 4 = 문자열 출력). `}F5 키로 끝까지 실행해 보세요. 빨간 점에서 멈추면 F5 키를 한 번 더 누르세요. 프로그램이 끝나면 출력이 어디에 나왔는지 보여 드립니다.`,
+    body: (t) => `${t.host.narrow() ? '' : `${t.line(OUT_SYSCALL) + 1}행의 \`ecall\` 줄이 문자열을 출력합니다(\`a7\` 값 4 = 문자열 출력). `}F5 키로 끝까지 실행해 보세요. 빨간 점에서 멈추면 F5 키를 한 번 더 누르세요. 프로그램이 끝나면 출력이 어디에 나왔는지 보여 드립니다.`,
     targets: (t) => [...(t.host.narrow() ? [] : [lines(t, t.line(OUT_SYSCALL) + 1)]), $('.console')],
     prepare: async (t) => { await t.notFinished(); if (t.host.expandConsole()) t.did.push('console opened'); },
     reveal: (t) => { if (!t.host.narrow()) t.host.revealLine(t.line(OUT_SYSCALL) + 1); },
     done: (_t, s) => (s.kind === 'stopped' && (s.reason === 'exit' || s.reason === 'error') ? 'next' : null),
     result: { view: 'run',
       title: () => '출력이 나왔습니다',
-      body: () => '`syscall` 명령이 출력한 문자열이 Console 패널에 나왔습니다. 프로그램은 여기서 끝났습니다(아래 상태 표시줄).',
+      body: () => '`ecall` 명령이 출력한 문자열과 정수가 Console 패널에 나왔습니다. 프로그램은 여기서 끝났습니다(아래 상태 표시줄).',
       targets: () => [$('.console .clog'), status()] },
     skip: async (t) => { for (let i = 0; i < 3 && !t.host.finished(); i += 1) await t.host.run(); } },
   { kind: 'practice', file: 'tutorial-error.s', view: 'editor', keys: ['Ctrl+S'], pose: 'curious',

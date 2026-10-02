@@ -149,6 +149,10 @@ bAssemble.dataset.tut = 'assemble';
 bRun.dataset.tut = 'run';
 bStep.dataset.tut = 'step';
 bRestart.dataset.tut = 'reset';
+bAssemble.dataset.tut = 'assemble';
+bRun.dataset.tut = 'run';
+bStep.dataset.tut = 'step';
+bRestart.dataset.tut = 'reset';
 // The speed of Run: Instant (the core runs on its own) or one line a second.
 const speedFast = h('button', { type: 'button', role: 'radio', title: 'Run at full speed' }, 'Instant');
 const speedSlow = h('button', { type: 'button', role: 'radio', title: 'Run one line a second' }, '1 line/s');
@@ -862,6 +866,10 @@ async function saveAndAssemble(): Promise<boolean> {
   const source = editor.text();
   saveNote = '';
   saveWarn = false;
+  if (file.example) {
+    saveNote = '예제라서 저장하지 않습니다';
+    return assemble(source);
+  }
   try {
     const saved = await api.saveFile({ path: file.path, name: file.name, text: source, format: file.format });
     if (saved) {
