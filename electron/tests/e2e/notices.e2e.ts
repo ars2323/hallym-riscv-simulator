@@ -1,0 +1,65 @@
+/* The notices (src/renderer/app/notice.ts): the Console's word before any
+   output, the Inspector's before the first step, the card on the Run side
+   before the first assemble -- one shape, in the middle of their panel,
+   at 1280x800 and on a maximised 1920 screen.  (RISC-V edition: the words
+   alone everywhere -- the university's characters are not in it.)  The error list under the Editor (the Assemble
+   panel) is the words alone, from the left, as tall as they are. */
+
+import { expect, test, type Page } from '@playwright/test';
+
+import { launch, openOnly, program, sample } from './harness.ts';
+
+interface Placed { where: string; dx: number; dy: number; char: boolean; charHeight: number; title: string; width: number }
+const placed = (page: Page): Promise<Placed[]> => page.evaluate(() => [...document.querySelectorAll('.notice')]
+  .filter((n) => (n as HTMLElement).checkVisibility())
+  .map((n) => {
+    const host = n.parentElement!;
+    const a = n.getBoundingClientRect();
+    const b = host.getBoundingClientRect();
+    const img = n.querySelector('img.char') as HTMLElement | null;
+    return {
+      where: host.closest('section')?.getAttribute('aria-label') ?? host.className.split(' ')[0],
+      dx: Math.round((a.left + a.right) / 2 - (b.left + b.right) / 2), dy: Math.round((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2),
+      char: img !== null && getComputedStyle(img).display !== 'none', charHeight: img?.getBoundingClientRect().height ?? 0,
+      title: getComputedStyle(n.querySelector('h3')!).fontSize, width: Math.round(a.width),
+    };
+  }));
+
+for (const size of [{ name: '1280x800', width: 1280, height: 800 }, { name: '1920x1040', width: 1920, height: 1040 }]) {
+  test(`${size.name}: each notice in the middle of its panel, the words alone, at one size`, async () => {
+    const r = await launch(size);
+    const { page } = r;
+    try {
+      const check = async (expected: string[]) => {
+        await page.mouse.move(-5, -5);
+        await page.waitForTimeout(300);
+        const all = await placed(page);
+        expect(all.map((p) => p.where).sort()).toEqual([...expected].sort());
+        for (const p of all) {
+          // The error list under the Editor: the words alone, from the left.
+          if (p.where === 'Assemble') { expect(p.char, 'Assemble: the words alone').toBe(false); expect(p.dx, 'Assemble: from the left').toBeLessThan(0); continue; }
+          expect(Math.abs(p.dx) <= 8 && Math.abs(p.dy) <= 8, `${p.where}: in the middle (${p.dx}, ${p.dy})`).toBe(true);
+          // The Console's empty word is the words alone: the Console is kept as
+          // short as they are (the height goes to Registers); the others have the character.
+          if (p.where === 'Console') { expect(p.char, 'Console: the words alone').toBe(false); continue; }
+          expect(p.char, `${p.where}: no character`).toBe(false);
+          expect(p.title, `${p.where}: one title size`).toBe('16px');
+          expect(p.width, `${p.where}: no wider than reads well`).toBeLessThanOrEqual(760);
+        }
+      };
+      await openOnly(r, sample(r.dir, 'tests/samples/lab04-ok.s', 'lab04.s'));
+      await check(['run-placeholder']);
+      await page.locator('.cm-content').click();
+      await page.keyboard.press('Control+s');
+      await page.waitForSelector('.run-grid:not([hidden])');
+      await check(['Console', 'Inspector']);
+      await openOnly(r, program(r.dir, 'bad.s', '        .text\nmain:   li a7, 10\n        srll t0, t0, 1\n        ecall\n'));
+      await page.locator('.cm-content').click();
+      await page.keyboard.press('Control+s');
+      await page.waitForSelector('.asm .item');
+      await check(['Assemble', 'run-placeholder']);
+    } finally {
+      await r.close();
+    }
+  });
+}

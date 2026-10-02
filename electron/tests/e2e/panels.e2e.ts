@@ -1,0 +1,136 @@
+/* The Run side's panels: the Inspector follows the program, Registers marks
+   what just changed, Data reads as a table, slow runs can always be stopped
+   or sped up, the Console is open from the start. */
+
+import { expect, test } from '@playwright/test';
+
+import { launch, openAndAssemble, program, regHex, resize, setSpeed, settled, statusText, type Running } from './harness.ts';
+
+let r: Running;
+test.beforeEach(async () => { r = await launch(); });
+test.afterEach(async () => { await r.close(); });
+
+const LOOP = 'main:\nloop:\n  addi t0, t0, 1\n  j loop\n';
+
+test('Inspector: follows PC at every step, pins to a chosen row, follows again on request', async () => {
+  const { page } = r;
+  await openAndAssemble(r, program(r.dir, 'p.s', 'main:\n  li t0, 5\n  li t1, 7\n  li a7, 10\n  ecall\n'));
+  const insp = page.locator('.insp');
+  await expect(insp.locator('.ihead')).toHaveCount(0); // not started, nothing chosen: the guide
+  await expect(insp).toContainText('32비트로 나누어 보는 곳');
+  await page.keyboard.press('F10');
+  await settled(page);
+  let pc = await regHex(page, 'pc');
+  await expect(insp.locator('.ihead .where')).toContainText(pc);
+  await expect(insp.locator('.phead')).toContainText('Following PC');
+  await page.keyboard.press('F10');
+  await settled(page);
+  pc = await regHex(page, 'pc');
+  await expect(insp.locator('.ihead .where')).toContainText(pc);
+
+  const chosen = await page.locator('.trow').nth(2).getAttribute('data-addr');
+  await page.locator('.trow').nth(2).locator('.dis').click();
+  await expect(insp.locator('.phead')).toContainText('Pinned');
+  await expect(insp.locator('.ihead .where')).toContainText(chosen!);
+  await page.keyboard.press('F10');
+  await settled(page);
+  await expect(insp.locator('.ihead .where')).toContainText(chosen!); // still the chosen one
+  await insp.getByRole('button', { name: 'Follow PC' }).click();
+  pc = await regHex(page, 'pc');
+  await expect(insp.locator('.ihead .where')).toContainText(pc);
+  await expect(insp.locator('.phead')).toContainText('Following PC');
+});
+
+test('Registers: the register a step changed is marked, with a tag, until the next step', async () => {
+  const { page } = r;
+  await resize(r, { width: 1280, height: 800 }); // at 1280, then at 1920, whatever size the run opens at
+  await openAndAssemble(r, program(r.dir, 'p.s', 'main:\n  li t0, 5\n  li t1, 7\n  li a7, 10\n  ecall\n'));
+  for (let i = 0; i < 20 && (await regHex(page, 'x5')) === '0x00000000'; i += 1) {
+    await page.keyboard.press('F10');
+    await settled(page);
+  }
+  const t0 = page.locator('.rrow[data-reg="x5"]');
+  await expect(t0).toHaveClass(/chg/);
+  await expect(t0.locator('.tag')).toBeHidden(); // no room for the tag beside Hex, Dec and Bin at 1280
+  await resize(r, { width: 1920, height: 1080 });
+  await expect(t0.locator('.tag')).toBeVisible();
+  await expect(page.locator('.rrow.chg')).toHaveCount(1);
+  await page.keyboard.press('F10');
+  await settled(page);
+  await expect(t0).not.toHaveClass(/chg/);
+  await expect(page.locator('.rrow[data-reg="x6"]')).toHaveClass(/chg/);
+  // RISC-V's calling-convention groups, not MIPS's (no Return values apart, no Reserved).
+  await expect(page.locator('.rgroup .gname')).toHaveText(['Special', 'Constant', 'Return address', 'Pointers', 'Arguments · return values', 'Temporaries', 'Saved', 'Floating point']);
+  await expect(page.locator('.rrow[data-reg="x8"] .rn')).toHaveText('x8 s0/fp');
+});
+
+test('Data: one address form, sections apart, zero runs spelled out, labels over their line, word and ASCII together', async () => {
+  const { page } = r;
+  await openAndAssemble(r, program(r.dir, 'd.s',
+    '  .data\nmsg: .asciz "Hello"\nnum: .word 0x12345678\n  .text\nmain:\n  li a7, 10\n  ecall\n'));
+  await page.locator('.ptab', { hasText: 'Data' }).click();
+  await expect(page.locator('.dsec')).toHaveText([/User data/, /Stack/]); // no kernel data in RARS's map
+  const addresses = await page.locator('.daddr').allTextContents();
+  expect(addresses.length).toBeGreaterThan(2);
+  for (const a of addresses) expect(a).toMatch(/^0x[0-9a-f]{8}$/);
+  await expect(page.locator('.dzero .dzerotext').first()).toContainText(/^~ 0x[0-9a-f]{8} · 모두 0 · [\d,]+ words$/);
+  await expect(page.locator('.dtags').filter({ hasText: 'msg' })).toContainText('num');
+  const line = page.locator('.drow', { has: page.locator('.dch', { hasText: 'Hell' }) });
+  await expect(line.locator('.dval').first()).toHaveText('6c6c6548'); // "Hell", little-endian
+  await line.locator('.dval').first().hover();
+  await expect(line.locator('.dch.lit')).toHaveText('Hell');
+});
+
+test('slow run: one line a second, the Editor and the Inspector follow; Esc stops at once', async () => {
+  const { page } = r;
+  await openAndAssemble(r, program(r.dir, 'loop.s', LOOP));
+  await setSpeed(page, '1 line/s');
+  await page.keyboard.press('F5');
+  await expect(page.locator('.status')).toContainText('천천히 실행 중');
+  await page.waitForTimeout(2600);
+  const text = await statusText(page);
+  const n = Number(/(\d+)단계/.exec(text)?.[1]);
+  expect(n).toBeGreaterThanOrEqual(2);
+  expect(n).toBeLessThanOrEqual(4);   // not the core's millions a second
+  await expect(page.locator('.insp .ihead')).toHaveCount(1);
+  // Right after a step lands, a whole second of waiting is ahead: Esc must not wait it out.
+  await page.waitForFunction((k) => Number(/(\d+)단계/.exec(document.querySelector('.status')!.textContent!)?.[1]) > k, n);
+  const t0 = Date.now();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.status')).toContainText('멈췄습니다');
+  expect(Date.now() - t0).toBeLessThan(500);
+  const after = await regHex(page, 'x5');
+  await page.waitForTimeout(1500);
+  expect(await regHex(page, 'x5')).toBe(after); // and it stays stopped
+});
+
+test('slow run switched to Instant goes on at full speed; Instant switched to slow slows down', async () => {
+  const { page } = r;
+  await openAndAssemble(r, program(r.dir, 'loop.s', LOOP));
+  await setSpeed(page, '1 line/s');
+  await page.keyboard.press('F5');
+  await expect(page.locator('.status')).toContainText('천천히 실행 중');
+  await setSpeed(page, 'Instant');
+  await expect(page.locator('.status')).toContainText('실행 중'); // the engine's own run (no progress events yet: docs/engine-protocol.md 10, hole 9)
+  await expect(page.locator('.status')).not.toContainText('천천히');
+  await page.waitForTimeout(500);
+  await setSpeed(page, '1 line/s');
+  await expect(page.locator('.status')).toContainText('천천히 실행 중');
+  const fast = parseInt(await regHex(page, 'x5'), 16);
+  expect(fast).toBeGreaterThan(10000);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.status')).toContainText('멈췄습니다');
+});
+
+test('Console: open from the start; what the program prints is in the body only', async () => {
+  const { page } = r;
+  await openAndAssemble(r, program(r.dir, 'hi.s',
+    '  .data\ns: .asciz "Hello World"\n  .text\nmain:\n  la a0, s\n  li a7, 4\n  ecall\n  li a7, 10\n  ecall\n'));
+  await expect(page.locator('.console')).toHaveClass(/open/);
+  await page.keyboard.press('F5');
+  await settled(page);
+  await expect(page.locator('.clog')).toHaveText('Hello World');
+  await expect(page.locator('.console .phead')).not.toContainText('Hello World');
+  await page.locator('.console .phead .hbtn').click();
+  await expect(page.locator('.console .cbody')).toBeHidden();
+});

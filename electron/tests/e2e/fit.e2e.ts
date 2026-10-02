@@ -1,0 +1,394 @@
+/* What a window keeps as it narrows (docs/PORTING.md 17):
+   - Registers keep Hex, Dec and Bin, Text keeps Address, Encoding and
+     Instruction, at 1280x800, on a lab PC (1366x768 at 125%: 1093x582),
+     at 1024x768 and at 1366x768 at 150% (910x505, the Run tab);
+   - a column the width takes away comes back from the panel's head;
+   - the toolbar's buttons keep their names (Save & Assemble its last
+     word, in a narrow title bar), the speed says what it is, and the first
+     screen has no toolbar;
+   - the yellow Registers row says what it is: its own "Changed" tag where
+     the panel has the room (from a 1651 px window on: 1680x1050, the
+     maximised 1920 screen), the status bar's "방금 바뀜: …" at every width
+     -- the panel's head carries no legend;
+   - no Korean word is broken across two lines;
+   - a file's name is never followed by a particle;
+   - the Editor has no band for the cursor, only the line of PC;
+   - assembly errors are on the Run side with one Haram;
+   - after a step the Registers show the register it changed, unless the
+     student is scrolling them;
+   - the Inspector folds instead of scrolling sideways. */
+
+import { expect, test, type Page } from '@playwright/test';
+
+import { columns } from '../../src/renderer/app/logic/names.ts';
+import { brokenWords, launch, openAndAssemble, resize, sample, settled, side, type Running } from './harness.ts';
+
+const SIZES = [
+  { name: '1280x800', width: 1280, height: 800 },
+  { name: 'a lab PC (1366x768 at 125%)', width: 1093, height: 582 },
+  { name: '1024x768', width: 1024, height: 728 },
+  { name: '1366x768 at 150%, the Run tab', width: 910, height: 505 },
+];
+
+// 10 steps: t6 = 0x80000001 is set (li is two words in RISC-V), PC at slli s0, t6, 1.
+async function lab04(r: Running, steps = 10): Promise<void> {
+  await openAndAssemble(r, sample(r.dir, 'tests/samples/lab04-ok.s', 'lab04.s'));
+  for (let i = 0; i < steps; i += 1) { await r.page.keyboard.press('F10'); await settled(r.page); }
+}
+
+// The Assemble button's name as the title bar shows it: Save & Assemble,
+// or Assemble where "Save &" has given way (the "short" step).
+async function assembleNamed(page: Page, where: string): Promise<void> {
+  const short = (await page.locator('.titlebar.short').count()) === 1;
+  await expect(page.locator('.toolbar .btn[data-tut="assemble"] .label'), where).toHaveText(short ? 'Assemble' : 'Save & Assemble');
+  for (const name of ['Run', 'Step', 'Reset']) {
+    await expect(page.locator('.toolbar .btn .label', { hasText: new RegExp(`^${name}$`) }), where).toBeVisible();
+  }
+}
+
+// What says what the yellow row is: its own "Changed" tag, or the status
+// bar's "방금 바뀜: …" (in the same yellow) -- each whole on screen.
+async function yellowSaid(page: Page): Promise<{ tag: boolean; status: boolean }> {
+  return page.evaluate(() => {
+    const within = (e: HTMLElement | null, box: { left: number; right: number; top: number; bottom: number }) => {
+      if (!e || !e.checkVisibility()) return false;
+      const r = e.getBoundingClientRect();
+      return r.width > 0 && r.left >= box.left - 0.5 && r.right <= box.right + 0.5 && r.top >= box.top - 0.5 && r.bottom <= box.bottom + 0.5;
+    };
+    const list = document.querySelector('.regs-list') as HTMLElement;
+    const l = list.getBoundingClientRect();
+    const status = document.querySelector('.status') as HTMLElement;
+    const s = status.getBoundingClientRect();
+    return {
+      tag: within(document.querySelector('.rrow.chg .tag'), { left: l.left, right: l.left + list.clientWidth, top: l.top, bottom: l.bottom }),
+      status: within(status.querySelector('.changed'), { left: s.left, right: s.right - parseFloat(getComputedStyle(status).paddingRight), top: s.top, bottom: s.bottom }),
+    };
+  });
+}
+
+const shown = (page: Page, selector: string) =>
+  page.locator(selector).evaluateAll((els) => els.filter((e) => e.checkVisibility()).map((e) => e.textContent));
+const whole = (page: Page, selector: string) =>
+  page.locator(selector).first().evaluate((e) => e.scrollWidth <= e.clientWidth + 1);
+
+for (const size of SIZES) {
+  test(`${size.name}: the course's columns, the buttons' names, whole words`, async () => {
+    const r = await launch(size);
+    const { page } = r;
+    try {
+      await lab04(r);
+      expect(await shown(page, '.rhead > span')).toEqual(expect.arrayContaining(['Name', 'Hex', 'Dec', 'Bin']));
+      expect(await shown(page, '.theader > span')).toEqual(expect.arrayContaining(['Address', 'Encoding', 'Instruction']));
+      // t6 = 0x80000001: its binary whole, eight groups of four.
+      await expect(page.locator('.rrow[data-reg="x31"] .bin span')).toHaveCount(8);
+      expect(await whole(page, '.rrow[data-reg="x31"] .bin')).toBe(true);
+      expect(await whole(page, '.rrow[data-reg="x31"] .dec')).toBe(true);
+
+      await assembleNamed(page, size.name);
+      await expect(page.locator('.titlebar .appname'), 'the program\'s name gives way last').toBeVisible();
+      // The yellow row says what it is; the panel's head has no legend.
+      const said = await yellowSaid(page);
+      console.log(`[${size.name}] the yellow row: tag ${said.tag}, status bar ${said.status}`);
+      expect(said.status, 'the status bar names the yellow row, whole').toBe(true);
+      await expect(page.locator('.regs .phead .pmeta')).toBeHidden();
+      expect(await shown(page, '.speedlabel, .speedone .label')).toEqual([expect.stringMatching(/^(Run speed|Speed: Instant)$/)]);
+      // Nothing of ours under the system's caption buttons.
+      expect(await page.evaluate(() => {
+        const o = (navigator as unknown as { windowControlsOverlay: { getTitlebarAreaRect(): DOMRect } }).windowControlsOverlay.getTitlebarAreaRect();
+        return document.querySelector('.titlebar .tools')!.getBoundingClientRect().right <= o.x + o.width + 0.5;
+      })).toBe(true);
+      // The line of PC in Text's view.
+      expect(await page.evaluate(() => {
+        const v = document.querySelector('.text')!.getBoundingClientRect();
+        const pc = document.querySelector('.trow.pc')!.getBoundingClientRect();
+        return pc.top >= v.top - 0.5 && pc.bottom <= v.bottom + 0.5;
+      })).toBe(true);
+      // Panel heads hold their names and switches ("+ Source" and all).
+      for (const head of ['.regs .phead', '.textpanel .phead', '.insp .phead', '.console .phead']) {
+        expect(await page.locator(head).evaluate((e) => e.scrollWidth <= e.clientWidth), head).toBe(true);
+      }
+      // A note in a head is whole or not there (never "30 instr…").
+      expect(await page.locator('.phead .pmeta').evaluateAll((els) =>
+        els.filter((e) => e.checkVisibility() && e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent))).toEqual([]);
+
+      // The Inspector: no sideways scroll, its head not cut short.
+      expect(await whole(page, '.insp .ibody')).toBe(true);
+      expect(await whole(page, '.ihead .isrc')).toBe(true);
+      expect(await whole(page, '.ihead .where')).toBe(true);
+      // Data: the four words, and no sideways scroll where they fit.
+      await page.locator('.ptab', { hasText: 'Data' }).click();
+      await page.waitForSelector('.drow');
+      expect(await shown(page, '.dhead > span')).toEqual(expect.arrayContaining(['Address', '+0', '+4', '+8', '+C']));
+      // (At 1024 the four words need ~25 px more than the tab has, even
+      // tight and a pixel smaller: there Data scrolls sideways.)
+      if (size.width !== 1024) expect(await whole(page, '.data')).toBe(true);
+      await page.locator('.ptab', { hasText: 'Text' }).click();
+
+      expect(await brokenWords(page)).toEqual([]);
+      await page.getByTitle('New file').click();
+      await page.waitForSelector('dialog.ask');
+      expect(await brokenWords(page)).toEqual([]);
+      await page.keyboard.press('Escape');
+      await openAndAssemble(r, sample(r.dir, 'tests/samples/lab04.s'));
+      await expect(page.locator('.pane-editor .asm .item')).toBeVisible();
+      expect(await brokenWords(page)).toEqual([]);
+    } finally {
+      await r.close();
+    }
+  });
+}
+
+// Real file names are long: "hw03_2021012345.s", "lab04_김학현.s".  With a
+// twenty-column one (Hangul in it), the file's name gives way before the
+// program's: cut in the stem, extension kept, never under ten columns, the
+// whole name in the tooltip -- and "Hallym MIPS" stays, at every size.
+// Again with the caption buttons 30 px wider, as on Windows (on Windows
+// itself the real ones already are).
+const LONG = 'lab04_김학현_20210123.s';
+const MAXIMISED = { name: 'maximised 1920 (1920x1040)', width: 1920, height: 1040 };
+for (const size of [...SIZES, MAXIMISED]) {
+  test(`${size.name}: a long file name gives way before the program's name`, async () => {
+    const r = await launch(size);
+    const { page } = r;
+    try {
+      for (const extra of process.platform === 'win32' ? [0] : [0, 30]) {
+        await page.evaluate((x) => document.documentElement.style.setProperty('--caption-extra', `${x}px`), extra);
+        for (const name of ['lab04.s', LONG]) {
+          await openAndAssemble(r, sample(r.dir, 'tests/samples/lab04-ok.s', name));
+          await page.evaluate(() => window.dispatchEvent(new Event('resize')));
+          const where = `${name}, caption +${extra}`;
+          await expect(page.locator('.titlebar .appname'), where).toBeVisible();
+          const label = page.locator('.titlebar .file');
+          await expect(label, where).toHaveAttribute('title', name);
+          const shown = (await label.locator('b').textContent())!;
+          expect(shown.endsWith('.s'), `${where}: ${shown}`).toBe(true);
+          expect(columns(shown), `${where}: ${shown}`).toBeGreaterThanOrEqual(Math.min(10, columns(name)));
+          if (shown !== name) expect(shown, where).toContain('…');
+          expect(await page.evaluate((x) => {
+            const o = (navigator as unknown as { windowControlsOverlay: { getTitlebarAreaRect(): DOMRect } }).windowControlsOverlay.getTitlebarAreaRect();
+            return document.querySelector('.titlebar .tools')!.getBoundingClientRect().right <= o.x + o.width - x + 0.5;
+          }, extra), `${where}: under the caption buttons`).toBe(true);
+          await assembleNamed(page, where);
+          // The long name where there is room: the maximised screen, and 1280 with a short file name.
+          if (size === MAXIMISED || (size.width === 1280 && name === 'lab04.s')) {
+            await expect(page.locator('.toolbar .btn[data-tut="assemble"] .label'), where).toHaveText('Save & Assemble');
+          }
+        }
+      }
+    } finally {
+      await r.close();
+    }
+  });
+}
+
+test.describe(() => {
+  let r: Running;
+  test.beforeEach(async () => { r = await launch(); });
+  test.afterEach(async () => { await r.close(); });
+
+  test('a column the width takes away comes back from the head, and goes again', async () => {
+    const { page } = r;
+    await lab04(r, 2);
+    await resize(r, { width: 1024, height: 728 });
+    const source = page.locator('.theader .src');
+    await expect(source).toBeHidden();
+    await page.locator('.textpanel .paside .hbtn', { hasText: '+ Source' }).click();
+    await expect(source).toBeVisible();
+    await expect(page.locator('.trow .src').first()).toBeVisible();
+    await expect(page.locator('.textpanel')).toHaveClass(/overflow/);
+    await page.locator('.text').evaluate((e) => { e.scrollLeft = 40; });
+    await expect.poll(() => page.locator('.theader').evaluate((e) => e.scrollLeft)).toBe(40); // the head goes along
+    await page.locator('.textpanel .paside .hbtn', { hasText: /^Source$/ }).click();
+    await expect(source).toBeHidden();
+    // Data gives up ASCII, and has it back from the same place.
+    await page.locator('.ptab', { hasText: 'Data' }).click();
+    await page.waitForSelector('.drow');
+    await expect(page.locator('.dhead .ascii')).toBeHidden();
+    await page.locator('.textpanel .paside .hbtn', { hasText: '+ ASCII' }).click();
+    await expect(page.locator('.dhead .ascii')).toBeVisible();
+    await page.locator('.ptab', { hasText: 'Text' }).click();
+    await expect(page.locator('.textpanel .paside .hbtn', { hasText: 'ASCII' })).toHaveCount(0);
+
+    // Registers squeezed by the splitter: Dec gives way before Bin.
+    const bar = await page.locator('.splitter .grip').boundingBox();
+    await page.mouse.move(bar!.x + 1, bar!.y + 5);
+    await page.mouse.down();
+    await page.mouse.move(1024 - 300, bar!.y + 5, { steps: 5 });
+    await page.mouse.up();
+    await expect(page.locator('.rhead .bin')).toBeVisible();
+    await expect(page.locator('.rhead .dec')).toBeHidden();
+    await page.locator('.regs .paside .hbtn', { hasText: '+ Dec' }).click();
+    await expect(page.locator('.rhead .dec')).toBeVisible();
+    await expect(page.locator('.rrow[data-reg="x5"] .dec')).toBeVisible();
+  });
+
+  test('a file\'s name stands on a line of its own in a question', async () => {
+    const { page } = r;
+    await lab04(r, 0);
+    await page.getByTitle('New file').click();
+    const dialog = page.locator('dialog.ask');
+    await expect(dialog.locator('.askfile')).toHaveText('File: lab04.s');
+    await expect(dialog.locator('p:not(.askfile)')).not.toContainText('lab04.s');
+    await page.keyboard.press('Escape');
+  });
+
+  test('the Editor: no band for the cursor; while running, the line of PC alone', async () => {
+    const { page } = r;
+    await lab04(r);
+    await side(page, 'Editor');
+    await page.locator('.cm-line', { hasText: 'ecall' }).first().click();
+    await expect(page.locator('.cm-activeLine')).toHaveCount(0);
+    await expect(page.locator('.cm-pc-line')).toHaveCount(1);
+  });
+
+  test('assembly errors: under the Editor, in the Assemble panel; Haram once (the Run side); a narrow window keeps them on the Editor tab', async () => {
+    const { page } = r;
+    await openAndAssemble(r, sample(r.dir, 'tests/samples/lab04.s'));
+    await expect(page.locator('.pane-editor .asm .item')).toBeVisible();
+    await expect(page.locator('.run-side .asm')).toHaveCount(0);
+    await expect(page.locator('.run-placeholder')).toHaveAttribute('data-kind', 'failed'); // nothing assembled yet
+    await side(page, 'Run'); // (a narrow window: the card is on the Run tab)
+    expect(await page.locator('img.char').evaluateAll((els) => els.filter((e) => e.checkVisibility()).length)).toBe(0); // no character in this edition
+    await side(page, 'Editor');
+
+    await resize(r, { width: 910, height: 505 });
+    await page.locator('.viewswitch button', { hasText: 'Editor' }).click();
+    await page.locator('.cm-content').click();
+    await page.keyboard.press('Control+s');
+    await expect(page.locator('.asm .item')).toBeVisible();
+    await expect(page.locator('.editor-panel')).toBeVisible();
+    await page.getByRole('button', { name: '15행으로 가기' }).click();
+    await expect(page.locator('.editor-panel')).toBeVisible();
+    expect(await page.evaluate(() => document.getSelection()?.anchorNode?.parentElement?.closest('.cm-line')?.textContent?.trim()))
+      .toBe('srll s1, t6, 1');
+  });
+
+  test('after a step the Registers show the register it changed, unless the student is scrolling them', async () => {
+    const { page } = r;
+    await resize(r, { width: 1093, height: 582 });
+    await lab04(r);
+    const inView = (key: string) => page.evaluate((k) => {
+      const list = document.querySelector('.regs-list')!;
+      const a = list.getBoundingClientRect();
+      const b = list.querySelector(`.rrow[data-reg="${k}"]`)!.getBoundingClientRect();
+      const head = list.querySelector('.rhead')!.getBoundingClientRect().height;
+      return b.top >= a.top + head - 1 && b.bottom <= a.bottom + 1;
+    }, key);
+    expect(await inView('x31')).toBe(true); // t6
+    // The student scrolls back to the top: the next step leaves it there.
+    await page.locator('.regs-list').hover();
+    await page.mouse.wheel(0, -3000);
+    await expect.poll(() => page.locator('.regs-list').evaluate((e) => e.scrollTop)).toBe(0);
+    await page.keyboard.press('F10');
+    await settled(page);
+    await expect(page.locator('.rrow[data-reg="x8"]')).toHaveClass(/chg/); // slli s0, t6, 1
+    expect(await page.locator('.regs-list').evaluate((e) => e.scrollTop)).toBe(0);
+    // Two seconds later it follows again.
+    await page.mouse.move(-5, -5);
+    await page.waitForTimeout(2100);
+    await page.keyboard.press('F10');
+    await settled(page);
+    await expect(page.locator('.rrow[data-reg="x9"]')).toHaveClass(/chg/); // srli s1, t6, 1
+    expect(await inView('x9')).toBe(true);
+  });
+});
+
+// A maximised 1920 screen (1920x1040 under the taskbar): the Editor stops at
+// what a line of 72 columns needs, and every pixel past that goes to the Run
+// side -- Text's Source column whole, the Inspector's bit grid at its full
+// size, Registers with all of Bin.  (docs/PORTING.md 21)
+test('1920x1040: the Editor stops at 72 columns; Source whole, the bit grid full size, Bin all eight groups', async () => {
+  const r = await launch({ width: 1920, height: 1040 });
+  const { page } = r;
+  try {
+    await lab04(r);
+    await page.waitForTimeout(300);
+    const m = await page.evaluate(() => {
+      const width = (s: string) => Math.round((document.querySelector(s) as HTMLElement).getBoundingClientRect().width);
+      const gutters = (document.querySelector('.cm-gutters') as HTMLElement).offsetWidth;
+      const probe = document.createElement('span');
+      probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre';
+      probe.className = 'cm-content';
+      probe.textContent = '0'.repeat(72);
+      document.querySelector('.cm-scroller')!.append(probe);
+      const chars = probe.getBoundingClientRect().width;
+      probe.remove();
+      const panel = document.querySelector('.editor-panel') as HTMLElement;
+      const chrome = panel.offsetWidth - (document.querySelector('.edhost') as HTMLElement).clientWidth;
+      const srcs = [...document.querySelectorAll('.trow .src')] as HTMLElement[];
+      const bin = document.querySelector('.rrow[data-reg="x31"] .bin') as HTMLElement;
+      const bit = document.querySelector('.insp .fbits .bit')!;
+      return {
+        editor: width('.editor-panel'), cap: Math.ceil(chrome + gutters + 8 + chars + 14), registers: width('.regs'), right: width('.textpanel'),
+        sourceCut: srcs.filter((e) => e.scrollWidth > e.clientWidth).length, sourceWidth: srcs[0]?.clientWidth ?? 0,
+        inspector: width('.insp'), bitFont: getComputedStyle(bit).fontSize, bitFontFull: getComputedStyle(document.documentElement).getPropertyValue('--fs').trim(),
+        // Per bit: RISC-V's narrowest field is funct3 (3 bits), MIPS's was 5; a bit's width is what reads.
+        fields: [...document.querySelectorAll('.insp .fbox')].map((e) => Math.round(e.getBoundingClientRect().width / e.querySelectorAll('.bit').length)),
+        binDigits: bin.textContent!.replace(/[^01]/g, '').length, binCut: bin.scrollWidth > bin.clientWidth, binShown: getComputedStyle(bin).display !== 'none',
+      };
+    });
+    const v = await page.evaluate(() => {
+      const height = (s: string) => Math.round((document.querySelector(s) as HTMLElement).getBoundingClientRect().height);
+      const list = document.querySelector('.regs-list') as HTMLElement;
+      const words = document.querySelector('.console .notice') as HTMLElement;
+      const head = document.querySelector('.console .phead') as HTMLElement;
+      return { column: height('.run-grid .leftcol'), registersHeight: height('.regs'), consoleHeight: height('.console'), consoleNeeds: Math.round(words.getBoundingClientRect().height + head.getBoundingClientRect().height) + 2,
+        rowsShown: list.clientHeight, rowsAll: list.scrollHeight };
+    });
+    console.log(`[1920x1040] ${JSON.stringify({ ...m, ...v })}`);
+    // Height: the Console, empty, as tall as its words; Registers the rest.
+    expect(Math.abs(v.consoleHeight - v.consoleNeeds), 'the empty Console as tall as its words').toBeLessThanOrEqual(3);
+    expect(Math.abs(v.registersHeight + 8 + v.consoleHeight - v.column), 'Registers has the rest').toBeLessThanOrEqual(2);
+    expect(Math.abs(m.editor - m.cap), 'the Editor at what 72 columns need').toBeLessThanOrEqual(2);
+    expect(m.sourceCut, 'Source cut short').toBe(0);
+    expect(m.bitFont, 'the bit grid at its full size').toBe(`${parseFloat(m.bitFontFull) + 2}px`);
+    expect(m.fields).toHaveLength(6);
+    expect(Math.min(...m.fields)).toBeGreaterThan(20); // px per bit (MIPS: a 5-bit field over 100 px)
+    expect(m.binShown && !m.binCut && m.binDigits === 32, 'Bin: all eight groups (32 bits), none cut').toBe(true);
+    // A line of 72 columns, no scroll bar.
+    await page.locator('.cm-content').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.insertText(`\n#${'abcdefghij'.repeat(7)}k`);
+    const scroll = await page.evaluate(() => { const s = document.querySelector('.cm-scroller') as HTMLElement; return { w: s.scrollWidth, c: s.clientWidth }; });
+    expect(scroll.w, '72 columns without scrolling sideways').toBeLessThanOrEqual(scroll.c);
+  } finally {
+    await r.close();
+  }
+});
+
+// The "Changed" tag on the yellow row itself where Registers' own width has
+// the room (from a 1651 px window on; tight margins for it up to 1703):
+// 1680x1050 and the maximised 1920 screen.  The status bar names it all the
+// same.
+for (const size of [{ name: '1680x1050', width: 1680, height: 1010 }, MAXIMISED]) {
+  test(`${size.name}: the yellow row carries its own "Changed" tag`, async () => {
+    const r = await launch(size);
+    try {
+      await lab04(r, 3);
+      const said = await yellowSaid(r.page);
+      expect(said, size.name).toEqual({ tag: true, status: true });
+      await expect(r.page.locator('.regs .phead .pmeta')).toBeHidden();
+    } finally {
+      await r.close();
+    }
+  });
+}
+
+// After a run many rows are yellow: the status bar names three and says how
+// many more, whole, in the narrowest window (910, the Run tab).
+test('a run: the status bar names the yellow rows, three and how many more, at 910', async () => {
+  const r = await launch({ width: 910, height: 505 });
+  const { page } = r;
+  try {
+    await openAndAssemble(r, sample(r.dir, 'tests/samples/lab04-ok.s', 'lab04.s'));
+    await side(page, 'Run');
+    await page.keyboard.press('F5');
+    await settled(page);
+    const yellow = await page.locator('.rrow.chg').count();
+    expect(yellow).toBeGreaterThan(3);
+    await expect(page.locator('.status .changed')).toHaveText(new RegExp(`^방금 바뀜: \\S+, \\S+, \\S+ 외 ${yellow - 3}개$`));
+    expect((await yellowSaid(page)).status).toBe(true);
+  } finally {
+    await r.close();
+  }
+});

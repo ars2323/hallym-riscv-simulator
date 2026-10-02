@@ -1,0 +1,42 @@
+{
+  "name": "hallym-riscv-electron",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Hallym RISC-V simulator (RARS engine in a JVM) as an Electron app",
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "build:ui": "node tools/build-ui.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import ./tests/helpers/timer-at-exit.ts \"tests/**/*.test.ts\"",
+    "test:mutants": "node tools/mutants.ts",
+    "build:electron": "node tools/build-electron.ts",
+    "electron": "node tools/build-ui.ts && node tools/electron.ts",
+    "e2e": "node tools/build-ui.ts && playwright test",
+    "e2e:widths": "node tools/build-ui.ts && node tools/e2e-widths.ts",
+    "screens": "node tools/build-ui.ts && node tools/capture-screens.ts",
+    "measure:ui": "node tools/build-ui.ts && node tools/measure-ui.ts",
+    "package": "node tools/package.ts",
+    "package:dir": "node tools/package.ts --dir",
+    "gen:rars-words": "node tools/gen-rars-words.ts"
+  },
+  "dependencies": {
+    "iconv-lite": "^0.7.3"
+  },
+  "devDependencies": {
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.13",
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.20.4",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "productName": "Hallym RISC-V Simulator"
+}

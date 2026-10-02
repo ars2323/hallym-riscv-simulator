@@ -1,0 +1,1275 @@
+/* The window.
+
+     title bar   logo, name, file, the toolbar; the system's own caption
+                 buttons on the right (titleBarOverlay, src/main/main.ts)
+     work        Editor | Run side by side (the app opens straight into an
+                 empty Editor): a splitter between them, either side can be folded;
+                 under the Editor the Assemble panel (what the last assemble
+                 did: its time and what it made, or its errors)
+     status bar
+
+   The Run side shows the last program that assembled, from the first
+   assemble on (before it, a card that says so).  Changing the code does not
+   take it away -- the student changes code because of what the registers
+   and the memory show: a band over the Run side says that what it shows is
+   the last assembled code, and Run, Step and Reset go on with that program
+   until the next assemble.  A program with errors is assembled first in a
+   second engine (main.ts, sim:check), so its errors leave the machine on
+   screen as it was.
+
+   The engine (RARS in a JVM, docs/engine-protocol.md) has a state the MIPS
+   app never had: it is starting, ready, restarting after a crash, or dead
+   (it cannot start).  The status bar says which; a dead engine says why on
+   the Run side instead of the machine.
+
+   (The MIPS edition's app.ts.  Not here: the first screen, the tutorial,
+   the .hmx export, Advanced settings -- docs in the RISC-V round's report.)  While the Editor holds the program in the machine, it
+   marks the line being executed (the Text panel's line column: the core's
+   own PC -> source mapping); once the code has changed it marks none (its
+   lines are no longer the program's), and Text alone shows where PC is.
+
+   Narrow windows (under NARROW_PX CSS pixels) show one side at a time, with
+   Editor / Run tabs in the title bar.
+
+   Widths: the Run side first gets what Registers (Hex, Dec, Bin) and Text
+   (Address, Encoding, Format, Instruction) need; the Editor takes 40% of
+   the rest of the window, or less, never under 300 px (a lab PC: 1093 px in
+   all).  The title bar gives way in steps (fitTitlebar): key hints, the
+   buttons' icons, the speed as one button, last the program's name -- the
+   buttons keep their names.
+
+   Nothing is restored from an earlier run: the font size, the Data radix,
+   Ctrl+/-, the splitter and the folds are this run's only (src/main/main.ts
+   keeps nothing on disk). */
+
+import { hex32 } from '../../core/format.ts';
+import { LabelMap } from '../../core/symbols.ts';
+import { abiName, FP_ABI_NAMES } from '../../core/registers.ts';
+import type { Settings } from '../../main/main.ts';
+import type { TextFileFormat } from '../../node/text-file.ts';
+import type { EngineState } from '../../sim/host.ts';
+import type { ErrorItem, RunReply } from '../../sim/protocol.ts';
+import './api.ts';
+import { code, codeText, h, icon, monoCh, withHex } from './dom.ts';
+import { captionPatch, WHITE_PATCH } from './logic/overlay.ts';
+import { notice } from './notice.ts';
+import { createEditor } from './editor.ts';
+import { shortName } from './logic/names.ts';
+import { changedKeys, stateAfter, stopMessage, stopReason, textRows, toValues, ZERO_REGS, type RegisterValues, type RunState, type StopReason, type TextRow } from './logic/machine.ts';
+import { aboutDialog } from './panels/about.ts';
+import { ConsolePanel } from './panels/console.ts';
+import { Inspector } from './panels/inspector.ts';
+import { RegisterPanel } from './panels/registers.ts';
+import { settingsDialog } from './panels/settings.ts';
+import { TextPanel } from './panels/text.ts';
+import { ask } from './panels/ask.ts';
+import type { DataSection } from './panels/data.ts';
+import { panelHead } from './ui.ts';
+
+const api = window.app;
+const UNTITLED = 'untitled.s';
+const APP_NAME = 'Hallym RISC-V';
+// Below this width (CSS px) the Editor and Run sides take turns.  A lab PC
+// (1366x768 at 125%) gives 1093: still side by side.  1366 at 150% gives
+// 910, and a half-screen window on a 1920 display 960: one at a time.
+const NARROW_PX = 980;
+
+// ---- state ------------------------------------------------------------------
+
+let open = true;                       // a document is open (always: the app opens straight into an untitled file)
+let file: { name: string; path: string | null; format: TextFileFormat | null } = { name: UNTITLED, path: null, format: null };
+let dirty = false;  // changes not saved (the title bar's dot)
+let edited = false; // the Editor's text is not the program in the machine (the band, no PC line)
+let settings: Settings = { fontSize: 13, dataBase: 16 };
+let zoom = 0;                          // Ctrl+/-: this session only
+let assembledText: string | null = null; // the program the machine holds
+// The last program that assembled and how (Reset loads it again, also after a crash).
+// The program on the machine, as it was assembled: Reset reloads it, Export writes its image.
+let lastGood: { source: string; name: string; path: string | null; format: TextFileFormat | null } | null = null;
+let lastAssembly: { at: Date; instructions: number } | null = null; // for the Assemble panel
+let lastDataEnd = 0x10010000;           // one past the highest data label: how much of .data to show
+let runState: RunState = 'ready';
+let busy = false;                      // a call is on its way; keys wait
+let steps = 0;
+let lastRegs: RegisterValues | null = null;
+let rows: TextRow[] = [];
+let selected = -1;
+// Breakpoints live in the Editor, by line; the engine holds those lines and
+// sets them again at every assemble (docs/engine-protocol.md 5.6).  This is
+// the engine's answer: the addresses they are on in the program on screen.
+const breakpoints = new Set<number>();
+let sentLines = '';                     // the lines the engine last got (JSON)
+const labels = new LabelMap();          // the program's, for Data
+let resumeWith: 'run' | 'step' = 'run';
+let errors: { message: string; line: number; col: number }[] = [];
+let saveNote = '';     // what Ctrl+S did with the file: shown until the first step
+let saveWarn = false;  // ...and whether it is a warning (not saved)
+let note = '';                          // a one-off word in the status bar (breakpoints)
+let exportNote = '';                    // the same, for an export that went well
+let crashNote = '';
+let progress: { pc: number; instructions: number } | null = null;
+let lastReason: StopReason = 'limit';
+let engineState: EngineState = 'starting';
+let engineDetail = '';
+let changedNow: string[] = []; // the registers the last step or run changed: the yellow rows
+let narrow = false;
+let view: 'editor' | 'run' = 'editor'; // narrow windows: the side on show
+let editorWidth: number | null = null; // px, from the splitter; null: the default share
+let consoleHeight: number | null = null; // px, from the grip over the Console; null: the default
+let asmHeight: number | null = null;     // px, from the grip over the Assemble panel; null: its words'
+let speed: 'fast' | 'slow' = 'fast';   // this session only
+let slow: { cancel(): void } | null = null; // a slow run going on
+let switchTo: 'fast' | 'slow' | null = null; // a run being switched to the other speed
+
+// ---- the title bar --------------------------------------------------------------
+
+function button(label: string, ic: string, key: string, onClick: () => void): HTMLButtonElement {
+  const b = h('button', { class: 'btn', type: 'button', title: key ? `${label} (${key})` : label }, icon(ic),
+    h('span', { class: 'label' }, label), key ? h('kbd', {}, key) : null);
+  b.addEventListener('click', onClick);
+  return b;
+}
+function iconButton(title: string, ic: string, onClick: () => void): HTMLButtonElement {
+  const b = h('button', { class: 'iconbtn', type: 'button', title, 'aria-label': title }, icon(ic));
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+const fileLabel = h('span', { class: 'file' });
+const bAssemble = button('Save & Assemble', 'hammer', 'Ctrl+S', () => void saveAndAssemble());
+const bRun = button('Run', 'play', 'F5', () => void runOrStop());
+const bStep = button('Step', 'step-forward', 'F10', () => void step());
+const bRestart = button('Reset', 'rotate-ccw', '', () => void restart());
+bAssemble.dataset.tut = 'assemble';
+bRun.dataset.tut = 'run';
+bStep.dataset.tut = 'step';
+bRestart.dataset.tut = 'reset';
+// The speed of Run: Instant (the core runs on its own) or one line a second.
+const speedFast = h('button', { type: 'button', role: 'radio', title: 'Run at full speed' }, 'Instant');
+const speedSlow = h('button', { type: 'button', role: 'radio', title: 'Run one line a second' }, '1 line/s');
+speedFast.addEventListener('click', () => void setSpeed('fast'));
+speedSlow.addEventListener('click', () => void setSpeed('slow'));
+const speedSwitch = h('span', { class: 'seg speed', role: 'radiogroup', 'aria-label': 'Run speed' }, speedFast, speedSlow);
+// A narrow title bar: the same choice as one button that says what it is.
+const speedOne = h('button', { class: 'btn speedone', type: 'button', title: 'Run speed (Instant / 1 line/s): 누르면 바뀝니다' });
+speedOne.addEventListener('click', () => void setSpeed(speed === 'fast' ? 'slow' : 'fast'));
+const speedBox = h('span', { class: 'speedbox' }, h('span', { class: 'speedlabel' }, 'Run speed'), speedSwitch, speedOne);
+const toolbar = h('span', { class: 'toolbar' }, bAssemble, bRun, speedBox, bStep, bRestart);
+const bSettings = iconButton('Settings', 'settings', () => settingsBox.open());
+const viewEditor = h('button', { type: 'button', role: 'tab' }, 'Editor');
+const viewRun = h('button', { type: 'button', role: 'tab' }, 'Run');
+viewEditor.addEventListener('click', () => showView('editor'));
+viewRun.addEventListener('click', () => showView('run'));
+const viewSwitch = h('span', { class: 'seg viewswitch', role: 'tablist', hidden: true }, viewEditor, viewRun);
+const titlebar = h('header', { class: 'titlebar' },
+  h('span', { class: 'brand' }, h('span', { class: 'appname' }, APP_NAME)),
+  fileLabel,
+  toolbar,
+  viewSwitch,
+  h('span', { class: 'drag' }),
+  h('span', { class: 'tools' },
+    iconButton('New file', 'file-plus', () => void newFile()),
+    iconButton('Open file (Ctrl+O)', 'folder-open', () => void openFile()),
+    bSettings));
+const status = h('footer', { class: 'status' });
+
+// ---- the Editor side -------------------------------------------------------------------
+
+const editorHost = h('div', { class: 'pbody edhost' });
+// Under the Editor: what the last assemble did (renderAssemble).  Named after
+// the button that fills it (Save & Assemble): not only errors.
+const asmHead = panelHead('Assemble');
+const asmBody = h('div', { class: 'pbody abody' });
+const asmPanel = h('section', { class: 'panel asm', 'aria-label': 'Assemble' }, asmHead.root, asmBody);
+const editor = createEditor(editorHost, () => void saveAndAssemble(), () => {
+  if (!dirty || !edited) { dirty = true; edited = true; renderChrome(); }
+}, (line, on) => void editorBreakpoint(line, on));
+const editorHead = panelHead('Editor');
+const editorPanel = h('section', { class: 'panel editor-panel', 'aria-label': 'Editor' }, editorHead.root, editorHost);
+
+// ---- the Run side ----------------------------------------------------------------------
+
+const text = new TextPanel({
+  select: (addr) => select(addr),
+  toggleBreakpoint: (addr) => void toggleBreakpoint(addr),
+});
+text.onTab = (tab) => { if (tab === 'data') void refreshData(); };
+const inspector = new Inspector();
+const consolePanel = new ConsolePanel();
+consolePanel.onInput = (line) => void giveInput(line);
+consolePanel.onToggle = () => layout();
+const regsHost = h('div', { class: 'regshost' });
+let registers: RegisterPanel | null = null;
+const centre = h('div', { class: 'centre' }, text.root, inspector.root);
+// Registers over the Console on the left, Text/Data over the Inspector on
+// the right: both of those get the whole height (a lab PC has ~480 px).
+// Between Registers and the Console, a grip: drag to share the height,
+// double-click for the default (the Console as tall as its words while it
+// is empty, its share once there is output: app.css).
+const consoleGrip = h('div', { class: 'vgrip', role: 'separator', 'aria-orientation': 'horizontal', title: '끌어서 높이 조절 · 두 번 눌러 되돌리기' },
+  h('span', { class: 'grip' }));
+const leftCol = h('div', { class: 'leftcol' }, regsHost, consoleGrip, consolePanel.root);
+const runGrid = h('div', { class: 'run-grid' }, leftCol, centre);
+const placeholder = h('div', { class: 'run-placeholder notice-host' });
+// Once the code in the Editor is not the program in the machine: one line
+// over the Run side, covering nothing.
+const runBand = h('div', { class: 'run-band', role: 'status', hidden: true });
+const runPanel = h('div', { class: 'run-side' }, runBand, placeholder, runGrid);
+
+// ---- the split -------------------------------------------------------------------------
+
+const railEditor = h('button', { class: 'rail', type: 'button', title: 'Expand Editor', 'aria-label': 'Expand Editor' }, h('span', {}, 'Editor ›'));
+const railRun = h('button', { class: 'rail', type: 'button', title: 'Expand Run', 'aria-label': 'Expand Run' }, h('span', {}, '‹ Run'));
+railEditor.addEventListener('click', () => unfold());
+railRun.addEventListener('click', () => unfold());
+// The splitter: drag to share the width, double-click for the default
+// share; its two small buttons fold one side away (a rail brings it back).
+const foldEditor = h('button', { class: 'foldbtn', type: 'button', title: 'Collapse Editor', 'aria-label': 'Collapse Editor' }, '‹');
+const foldRun = h('button', { class: 'foldbtn', type: 'button', title: 'Collapse Run', 'aria-label': 'Collapse Run' }, '›');
+foldEditor.addEventListener('click', () => fold('editor'));
+foldRun.addEventListener('click', () => fold('run'));
+const splitter = h('div', { class: 'splitter', role: 'separator', 'aria-orientation': 'vertical', title: '끌어서 폭 조절 · 두 번 눌러 되돌리기' },
+  foldEditor, h('span', { class: 'grip' }), foldRun);
+// Between the Editor and the Assemble panel, a grip like the Console's.
+const asmGrip = h('div', { class: 'vgrip', role: 'separator', 'aria-orientation': 'horizontal', title: '끌어서 높이 조절 · 두 번 눌러 되돌리기' },
+  h('span', { class: 'grip' }));
+const paneEditor = h('div', { class: 'pane pane-editor' }, editorPanel, asmGrip, asmPanel, railEditor);
+const paneRun = h('div', { class: 'pane pane-run' }, runPanel, railRun);
+const split = h('div', { class: 'split' }, paneEditor, splitter, paneRun);
+const work = h('main', { class: 'work' }, split);
+
+document.body.append(h('div', { class: 'app' }, titlebar, work, status));
+
+let folded: 'none' | 'editor' | 'run' = 'none';
+function fold(side: 'editor' | 'run'): void { folded = side; layout(); }
+function unfold(): void { folded = 'none'; layout(); }
+
+splitter.addEventListener('pointerdown', (e) => {
+  if ((e.target as HTMLElement).closest('.foldbtn')) return;
+  splitter.setPointerCapture(e.pointerId);
+  const left = split.getBoundingClientRect().left;
+  const move = (m: PointerEvent) => {
+    const total = split.clientWidth;
+    editorWidth = Math.max(280, Math.min(total - 360, m.clientX - left));
+    layout();
+  };
+  const up = () => { splitter.removeEventListener('pointermove', move); splitter.removeEventListener('pointerup', up); };
+  splitter.addEventListener('pointermove', move);
+  splitter.addEventListener('pointerup', up);
+});
+splitter.addEventListener('dblclick', () => { editorWidth = null; layout(); });
+
+consoleGrip.addEventListener('pointerdown', (e) => {
+  if (!consolePanel.expanded) return; // folded: the Expand button opens it
+  consoleGrip.setPointerCapture(e.pointerId);
+  const bottom = leftCol.getBoundingClientRect().bottom;
+  const move = (m: PointerEvent) => {
+    // At least the Console's head and a line; Registers keeps its head and a few rows.
+    consoleHeight = Math.round(Math.max(72, Math.min(leftCol.clientHeight - 8 - 120, bottom - m.clientY)));
+    layout();
+  };
+  const up = () => { consoleGrip.removeEventListener('pointermove', move); consoleGrip.removeEventListener('pointerup', up); };
+  consoleGrip.addEventListener('pointermove', move);
+  consoleGrip.addEventListener('pointerup', up);
+});
+consoleGrip.addEventListener('dblclick', () => { consoleHeight = null; layout(); });
+
+asmGrip.addEventListener('pointerdown', (e) => {
+  asmGrip.setPointerCapture(e.pointerId);
+  const bottom = paneEditor.getBoundingClientRect().bottom;
+  const move = (m: PointerEvent) => {
+    // At least the panel's head and a line; the Editor keeps its least (layout()).
+    asmHeight = Math.round(Math.max(ASM_LEAST, Math.min(asmRoom(), bottom - m.clientY)));
+    layout();
+  };
+  const up = () => { asmGrip.removeEventListener('pointermove', move); asmGrip.removeEventListener('pointerup', up); };
+  asmGrip.addEventListener('pointermove', move);
+  asmGrip.addEventListener('pointerup', up);
+});
+asmGrip.addEventListener('dblclick', () => { asmHeight = null; layout(); });
+
+function showView(v: 'editor' | 'run'): void {
+  view = v;
+  layout();
+  if (v === 'editor') requestAnimationFrame(() => editor.view.focus());
+}
+
+// ---- layout ------------------------------------------------------------------------------
+
+function measure(): void {
+  const wasNarrow = narrow;
+  narrow = window.innerWidth < NARROW_PX;
+  document.documentElement.dataset.narrow = String(narrow);
+  if (!registers) buildRegisters();
+  void wasNarrow;
+  layout();
+  fitTitlebar();
+}
+
+function buildRegisters(): void {
+  registers = new RegisterPanel(lastRegs ?? ZERO_REGS);
+  regsHost.replaceChildren(registers.root);
+}
+
+// The Run side shows the machine from the first assemble on; the Editor's
+// code is the machine's program only until it changes.
+const machineShown = () => assembledText !== null;
+const current = () => assembledText !== null && !edited;
+
+// Heights on the Editor side: the Editor keeps EDITOR_LEAST_LINES whole
+// lines of code (and its head) whatever the Assemble panel says.  The panel
+// is as tall as its words -- up to ASM_SHARE of the column (never less than
+// ASM_AUTO: one error and its button), the list scrolling past that -- and
+// the grip may make it as tall as leaves the Editor its least.
+const EDITOR_LEAST_LINES = 6;
+const ASM_LEAST = 64;
+const ASM_AUTO = 240;
+const ASM_SHARE = 0.4;
+const editorLeast = (): number => {
+  const head = (editorPanel.querySelector('.phead') as HTMLElement).offsetHeight || 36;
+  const line = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--row')) || 22;
+  return Math.ceil(head + EDITOR_LEAST_LINES * line + 22); // 22: borders, the text's top padding, a sideways scroll bar
+};
+const asmRoom = (): number => Math.max(ASM_LEAST, paneEditor.clientHeight - editorLeast() - 8);
+
+function layout(): void {
+  split.hidden = !open;
+  viewSwitch.hidden = !open || !narrow;
+  split.classList.toggle('narrow', narrow);
+  split.dataset.view = view;
+  split.dataset.folded = narrow ? 'none' : folded;
+  viewEditor.classList.toggle('on', view === 'editor');
+  viewRun.classList.toggle('on', view === 'run');
+  sizeRunSide();
+  const inner = split.clientWidth - 16 - 8; // the split's padding, the splitter
+  if (editorWidth !== null) split.style.setProperty('--editor-w', `${editorWidth}px`);
+  else if (inner > 0) split.style.setProperty('--editor-w', `${Math.round(Math.max(300, Math.min(editorMost(), inner - runLeast)))}px`);
+
+  const shown = machineShown();
+  runGrid.hidden = !shown;
+  placeholder.hidden = shown;
+  if (!shown) renderPlaceholder();
+  renderBand();
+  renderAssemble();
+  runGrid.classList.toggle('console-open', consolePanel.expanded);
+  if (consoleHeight === null) leftCol.style.removeProperty('--console-h');
+  else leftCol.style.setProperty('--console-h', `${consoleHeight}px`);
+  const room = asmRoom();
+  const cap = asmHeight === null ? Math.min(room, Math.max(ASM_AUTO, Math.round(ASM_SHARE * paneEditor.clientHeight))) : room;
+  paneEditor.style.setProperty('--asm-max', `${cap}px`);
+  if (asmHeight === null) paneEditor.style.removeProperty('--asm-h');
+  else paneEditor.style.setProperty('--asm-h', `${Math.min(asmHeight, room)}px`);
+  // The line being executed, in the Editor only while its code is the
+  // program's: once it has changed its lines are not the program's lines.
+  editor.showPcLine(current() && runState !== 'ready' ? pcSourceLine() : null);
+}
+
+// The Editor's width by default: what a line of EDITOR_COLUMNS characters
+// needs (gutters and all), and no more -- a student's longest line is far
+// shorter, and every pixel past that is a pixel the Run side reads with:
+// Text's Source column and the Inspector are what grow with the window.
+// Never a share of the window: a share is right at one width only.
+// The character's width is measured with the code font itself, at the
+// Editor's size (dom.ts monoCh; not CodeMirror's own figure, which can be
+// taken before the font has loaded), and the layout is done again once the
+// fonts are in (below, "fonts").
+const EDITOR_COLUMNS = 72;
+const editorMost = (): number => (editorPanel.offsetWidth - editorHost.clientWidth) + editor.widthFor(EDITOR_COLUMNS, monoCh(fontPx() + 0.5));
+
+// The Run side's width: what Registers and Text need (their panels say).
+let runLeast = 0;
+const fontPx = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fs')) || 13;
+function sizeRunSide(): void {
+  if (!registers) return;
+  const fs = fontPx();
+  const r = registers.widths(fs);
+  runGrid.style.setProperty('--regs-least', `${r.least}px`);
+  runGrid.style.setProperty('--regs-most', `${r.most}px`);
+  // Text needs its four columns; Data its four words and the ASCII column --
+  // where the window has the room (the Editor stays at 300 px or more).
+  runLeast = r.least + 8 + Math.max(text.leastWidth(fs), text.data.leastWidth(fs));
+}
+
+// The Run side before there is a program to show: not assembled yet, the
+// first assemble had errors, the engine stopped (a crash) -- or it is not
+// there at all (dead: it could not start), which no key can mend.
+function renderPlaceholder(): void {
+  const kind = engineState === 'dead' ? 'dead' : crashNote ? 'crashed' : errors.length ? 'failed' : 'fresh';
+  const where = narrow ? 'Editor 탭 아래쪽의 Assemble 패널' : '편집기 아래 Assemble 패널';
+  const [title, body] = kind === 'dead' ? ['시뮬레이터 엔진을 쓸 수 없습니다', `${engineDetail} 프로그램을 다시 시작해 보고, 그래도 안 되면 조교에게 알려 주세요.`]
+    : kind === 'crashed' ? ['시뮬레이터 엔진이 멈췄습니다', '엔진을 다시 시작했습니다. 프로그램은 지워졌으니 Ctrl+S 키로 다시 어셈블하세요.']
+    : kind === 'failed' ? ['아직 어셈블된 프로그램이 없습니다', `${where}에 나온 오류를 고친 뒤 Ctrl+S 키를 다시 누르세요.`]
+    : ['아직 어셈블하지 않았습니다', '어셈블하면 여기에 레지스터와 명령, 콘솔 출력이 나옵니다.'];
+  const key = JSON.stringify([kind, title, body, assembleName(false), engineDetail]);
+  if (placeholder.dataset.key === key) return;
+  placeholder.dataset.key = key;
+  const go = h('button', { class: 'btn primary', type: 'button' }, icon('hammer'), h('span', {}, assembleName(false)), h('kbd', {}, 'Ctrl+S'));
+  go.addEventListener('click', () => void saveAndAssemble());
+  placeholder.replaceChildren(notice({ title, body, more: kind === 'dead' ? [] : [h('div', { class: 'row' }, go)] }));
+  placeholder.dataset.kind = kind;
+}
+
+// The time of an assemble, as the Assemble panel and the band say it.
+const clock = (d: Date) => d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
+// Over the Run side while the Editor's code is not the machine's program.
+function renderBand(): void {
+  const on = machineShown() && edited;
+  runBand.hidden = !on;
+  if (!on) return;
+  const at = lastAssembly ? ` (${clock(lastAssembly.at)})` : '';
+  const text = `지금 보이는 것은 마지막으로 어셈블한 코드입니다${at} · 고친 코드를 어셈블하려면 Ctrl+S`;
+  if (runBand.textContent !== text) { runBand.textContent = text; runBand.title = text; }
+}
+
+// The Assemble panel: the last assemble's errors; or when it was and what it
+// made, with a line once the code has changed since; or, before any, what
+// Ctrl+S will do.  Drawn again only when what it says changes (a list the
+// student has scrolled stays where it is).
+let asmKey = '';
+function renderAssemble(): void {
+  const key = JSON.stringify([errors.map((e) => [e.line, e.col, e.message]), lastAssembly?.at.getTime() ?? null,
+    lastAssembly?.instructions ?? null, edited, machineShown(), saveNote, saves(), narrow]);
+  if (key === asmKey) return;
+  asmKey = key;
+  asmPanel.dataset.state = errors.length ? 'errors' : lastAssembly ? (edited ? 'changed' : 'ok') : 'fresh';
+  if (errors.length) {
+    asmHead.setMeta(errors.length === 1 ? '1 error' : `${errors.length} errors`);
+    asmBody.replaceChildren(errorNotice());
+    return;
+  }
+  if (lastAssembly) {
+    asmHead.setMeta(clock(lastAssembly.at));
+    const said = [h('p', { class: 'ok' }, `어셈블했습니다 · 명령 ${lastAssembly.instructions}개${saveNote ? ` · ${saveNote}` : ''}`)];
+    if (edited) said.push(h('p', { class: 'warn' }, '코드가 바뀌었습니다. 실행은 마지막으로 어셈블한 코드로 합니다 — 고친 코드를 어셈블하려면 Ctrl+S 키를 누르세요.'));
+    asmBody.replaceChildren(h('div', { class: 'asm-state' }, ...said));
+    return;
+  }
+  asmHead.setMeta('');
+  asmBody.replaceChildren(h('div', { class: 'asm-state' },
+    h('p', {}, `Ctrl+S 키를 누르면 ${saves() ? '저장하고 ' : ''}어셈블합니다. 결과와 오류가 여기에 나옵니다.`)));
+}
+
+// The Editor line of PC: the Text row's line (several words of one pseudo
+// instruction share it).  RARS's text holds the student's program only --
+// no start-up code from an exception handler -- so every row's line is one
+// of the Editor's.
+function pcSourceLine(): number | null {
+  return lastRegs ? lineOf(lastRegs.pc) : null;
+}
+
+function lineOf(addr: number): number | null {
+  const row = rows.find((r) => r.addr === addr >>> 0);
+  return row && row.line > 0 && row.line <= editor.view.state.doc.lines ? row.line : null;
+}
+
+// ---- font size ---------------------------------------------------------------------
+
+function applyFont(): void {
+  const fs = Math.max(10, Math.min(24, settings.fontSize + zoom));
+  const root = document.documentElement.style;
+  root.setProperty('--fs', `${fs}px`);
+  root.setProperty('--row', `${Math.round(fs * 1.7)}px`);
+  root.setProperty('--rrow', `${Math.round(fs * 1.62)}px`);
+  text.relayout();
+  text.fit();
+  registers?.fit();
+  editor.view.requestMeasure();
+  fitTitlebar(); // the bar's words grow with the font: fit again (before 2.7.0 it kept the default font's steps)
+}
+
+// ---- settings and about -----------------------------------------------------------
+
+const about = aboutDialog();
+const settingsBox = settingsDialog({
+  fontSize: () => settings.fontSize,
+  setFontSize: async (px) => {
+    settings = await api.setSettings({ ...settings, fontSize: Math.max(10, Math.min(24, px)) });
+    applyFont();
+    return settings.fontSize;
+  },
+  dataBase: () => settings.dataBase,
+  setDataBase: async (base) => {
+    settings = await api.setSettings({ ...settings, dataBase: base });
+    if (text.tab === 'data') void refreshData();
+  },
+  about: () => void about.open(),
+});
+document.body.append(settingsBox.root, about.root);
+
+// ---- chrome: title bar and status bar ----------------------------------------------------
+
+function renderChrome(): void {
+  document.title = open ? `${file.name}${dirty ? ' •' : ''} — ${APP_NAME}` : APP_NAME;
+  showFileName(FILE_MOST);
+  const running = runState === 'running';
+  const setBtn = (b: HTMLButtonElement, on: boolean, primary: boolean) => {
+    b.disabled = !on;
+    b.classList.toggle('primary', primary && on);
+  };
+  setBtn(bAssemble, open && !running, !current());
+  // Waiting for input is a run that is still going: Stop ends it (the engine undoes the half-done ecall).
+  const stoppable = running || runState === 'input';
+  bRun.replaceChildren(icon(stoppable ? 'square' : 'play'), h('span', { class: 'label' }, stoppable ? 'Stop' : 'Run'),
+    h('kbd', {}, stoppable ? 'Esc' : 'F5'));
+  bRun.title = stoppable ? 'Stop (Esc)' : 'Run (F5)';
+  setBtn(bRun, open && (running || runState === 'input' || runState !== 'finished'), running || runState === 'input');
+  setBtn(bStep, open && !stoppable && runState !== 'finished', current() && !stoppable);
+  setBtn(bRestart, lastGood !== null && !busy, false);
+  speedFast.classList.toggle('on', speed === 'fast');
+  speedSlow.classList.toggle('on', speed === 'slow');
+  speedFast.setAttribute('aria-checked', String(speed === 'fast'));
+  speedSlow.setAttribute('aria-checked', String(speed === 'slow'));
+  speedOne.replaceChildren(h('span', { class: 'label' }, h('span', { class: 'pre' }, 'Speed: '), speed === 'fast' ? 'Instant' : '1 line/s'));
+  // No file, nothing to run: the first screen has no toolbar.
+  toolbar.hidden = !open;
+  editorHead.setMeta(open ? h('span', {}, code(file.name), ` · ${file.format?.encoding ?? 'UTF-8'} · ${file.format?.lineEnd ?? 'LF'}`) : '');
+  layout();
+  renderStatus();
+  fitTitlebar();
+}
+
+// The file's name in the title bar, at most `cols` columns (logic/names.ts);
+// the whole name in its tooltip.
+const FILE_MOST = 32;
+const FILE_LEAST = 10;
+function showFileName(cols: number): void {
+  fileLabel.title = open ? file.name : '';
+  fileLabel.replaceChildren(open ? h('b', { class: 'mono' }, shortName(file.name, cols)) : '',
+    open && dirty ? h('span', { class: 'dirty', title: 'Unsaved changes' }, ' •') : '');
+}
+
+// The Assemble button's name says what it does: Save & Assemble -- Ctrl+S
+// saves the file (a new one asks where to) and assembles it -- but only
+// Assemble for the tutorial's examples, which are never saved (the status
+// bar says so), and in a title bar too narrow for the long name (the
+// "short" step below; the tooltip still says Save & Assemble).
+const saves = (): boolean => true;
+const assembleName = (short: boolean): string => (saves() && !short ? 'Save & Assemble' : 'Assemble');
+function nameAssemble(): void {
+  (bAssemble.querySelector('.label') as HTMLElement).textContent = assembleName(titlebar.classList.contains('short'));
+  bAssemble.title = saves() ? 'Save & Assemble (Ctrl+S)' : 'Assemble (Ctrl+S): 예제라서 저장하지 않습니다';
+}
+
+// The title bar gives way one step at a time, as far as it has to: the key
+// hints, the buttons' icons (their names stay), Save & Assemble's "Save &",
+// the speed as one button, tighter spacing, the file's name (down to
+// FILE_LEAST columns), the program's name (the logo stays) -- the file's
+// name then takes back what the program's name left -- and, a big font in
+// a narrow window, the buttons' names (their icons back; TITLE_LAST), then
+// their icons' size.  Every button keeps its border.  All measured: the
+// font takes room at any width, so the font's changes fit it again too.
+// It fits when its last item ends before the padding kept for the system's
+// caption buttons (scrollWidth does not count what spills into padding).
+const TITLE_STEPS = ['nokeys', 'noicons', 'short', 'onespeed', 'tighter'] as const;
+const TITLE_LAST = ['iconsonly', 'smallicons'] as const;
+const tools = titlebar.querySelector('.tools') as HTMLElement;
+function fitTitlebar(): void {
+  const end = () => titlebar.getBoundingClientRect().right - parseFloat(getComputedStyle(titlebar).paddingRight);
+  const fits = () => tools.getBoundingClientRect().right <= end() + 0.5;
+  titlebar.classList.remove('noapp', ...TITLE_LAST);
+  showFileName(FILE_MOST);
+  for (let level = 0; level <= TITLE_STEPS.length; level += 1) {
+    TITLE_STEPS.forEach((step, k) => titlebar.classList.toggle(step, k < level));
+    nameAssemble();
+    if (fits()) return;
+  }
+  // The longest name that fits, between FILE_LEAST and FILE_MOST columns.
+  const longest = (): boolean => {
+    let lo = FILE_LEAST;
+    let hi = FILE_MOST;
+    showFileName(lo);
+    if (!fits()) return false;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      showFileName(mid);
+      if (fits()) lo = mid; else hi = mid - 1;
+    }
+    showFileName(lo);
+    return true;
+  };
+  if (longest()) return;
+  titlebar.classList.add('noapp');
+  if (longest()) return;
+  for (let level = 1; level <= TITLE_LAST.length; level += 1) {
+    TITLE_LAST.forEach((step, k) => titlebar.classList.toggle(step, k < level));
+    if (longest()) return;
+  }
+  showFileName(FILE_LEAST);
+}
+window.addEventListener('resize', () => fitTitlebar());
+// The room kept for the caption buttons (the padding's env(titlebar-area-*))
+// is updated after the resize and the layout: fit again then, or a window
+// made wider keeps the title bar it had when narrow.
+(navigator as unknown as { windowControlsOverlay?: EventTarget }).windowControlsOverlay
+  ?.addEventListener('geometrychange', () => fitTitlebar());
+
+function renderStatus(): void {
+  const parts: (Node | string)[] = [];
+  const span = (cls: string, ...c: (Node | string)[]) => h('span', { class: cls }, ...c);
+  if (engineState !== 'ready') parts.push(span(engineState === 'dead' ? 'err' : 'run engine',
+    engineState === 'starting' ? '엔진 준비 중…' : engineState === 'restarting' ? '엔진을 다시 시작하는 중…' : '엔진을 쓸 수 없음'));
+  if (crashNote) parts.push(span('err', crashNote));
+  if (!open) parts.push(span('', '준비'));
+  else if (assembledText === null) {
+    if (errors.length) {
+      parts.push(span('err', `오류 ${errors.length}개`));
+      const e = errors[0];
+      parts.push(span('', e.line ? `${e.line}행 · ` : '', withHex(e.message)));
+    } else parts.push(span('', !saves() ? '어셈블 (Ctrl+S)' : edited ? '고친 뒤 저장·어셈블 (Ctrl+S)' : '저장·어셈블 (Ctrl+S)'));
+    if (saveNote) parts.push(span(saveWarn ? 'warn' : '', saveNote));
+  } else {
+    const pc = lastRegs ? hex32(lastRegs.pc) : '';
+    if (runState === 'running' && slow) {
+      parts.push(span('run', '천천히 실행 중 (1 line/s)'));
+      if (steps > 0) parts.push(span('', `${steps}단계`));
+      if (pc) parts.push(span('', 'PC ', code(pc)));
+      if (changedNow.length) parts.push(changedPart());
+      parts.push(span('', '멈추려면 Esc · 빨리 가려면 Instant'));
+    } else if (runState === 'running') {
+      parts.push(span('run', '실행 중'));
+      parts.push(span('', '멈춤 (Esc)'));
+    } else if (runState === 'input') {
+      parts.push(span('run', codeText(stopMessage('input', pc))));
+      parts.push(span('', '멈춤 (Esc)'));
+    } else {
+      const reason = lastReason;
+      if (runState === 'ready') parts.push(span('', code('F10'), ' Step · ', code('F5'), ' Run'));
+      if (runState === 'ready' && steps === 0 && saveNote) parts.push(span(saveWarn ? 'warn' : '', saveNote));
+      else if (runState === 'finished') parts.push(span(reason === 'error' ? 'err' : 'ok', stopMessageFor(reason, pc)));
+      else parts.push(span('run', codeText(stopMessage(reason, pc))));
+      if (steps > 0 && runState !== 'finished') parts.push(span('', `${steps}단계`));
+      if (runState !== 'finished' && reason !== 'limit' && pc) parts.push(span('', 'PC ', code(pc)));
+      if (changedNow.length) parts.push(changedPart());
+      if (selected >= 0) parts.push(span('', '고른 명령 ', code(hex32(selected))));
+    }
+    // A later assemble that failed (the machine keeps the last program).
+    if (errors.length) parts.push(span('err', `고친 코드에 오류 ${errors.length}개 — Assemble 패널`));
+  }
+  if (note) parts.push(span('warn', note));
+  else if (exportNote) parts.push(span('ok', exportNote));
+  status.replaceChildren(...parts);
+}
+const stopMessageFor = (reason: StopReason, pc: string) =>
+  reason === 'exit' ? '프로그램이 끝났습니다 — 다시 하려면 Reset' : reason === 'error' ? '실행 오류로 멈췄습니다 — 콘솔을 보세요' : stopMessage(reason, pc);
+
+// ---- files -------------------------------------------------------------------------
+
+// Before another file takes the Editor's place.  Unsaved changes are always
+// asked about; a new file is asked about even when everything is saved --
+// it empties the Editor, which a student does not expect from one click.
+async function mayReplace(what: 'new' | 'open'): Promise<boolean> {
+  if (!open) return true;
+  if (dirty) {
+    return ask({
+      title: '저장하지 않은 변경이 있습니다',
+      file: file.name,
+      body: `${what === 'new' ? '새 파일을 열면' : '다른 파일을 열면'} 저장하지 않은 내용은 사라집니다.`,
+      ok: '버리고 계속', cancel: '돌아가기', danger: true,
+    });
+  }
+  if (what === 'new') {
+    return ask({
+      title: '새 파일을 열까요?',
+      file: file.name,
+      body: '이 파일은 저장되어 있습니다. 편집기를 비우고 새 파일을 시작합니다.',
+      ok: '새 파일', cancel: '돌아가기',
+    });
+  }
+  return true;
+}
+
+async function load(opened: { name: string; path: string | null; text: string; format: TextFileFormat } | null): Promise<void> {
+  if (!opened) return;
+  await forgetMachine();
+  file = { name: opened.name, path: opened.path, format: opened.format };
+  editor.setReadOnly(false);
+  editor.setText(opened.text);
+  dirty = false;
+  edited = false;
+  errors = [];
+  [saveNote, saveWarn] = ['', false];
+  crashNote = '';
+  renderErrors();
+  open = true;
+  view = 'editor';
+  renderChrome();
+  requestAnimationFrame(() => editor.view.focus());
+}
+
+async function newFile(): Promise<void> {
+  if (!(await mayReplace('new'))) return;
+  await load({ name: UNTITLED, path: null, text: '', format: { encoding: 'UTF-8', byteOrderMark: false, lineEnd: 'LF' } });
+  file.format = null;
+  renderChrome();
+}
+async function openFile(): Promise<void> {
+  if (!(await mayReplace('open'))) return;
+  await load(await api.openFile().catch((e: Error) => { [saveNote, saveWarn] = [e.message, true]; renderChrome(); return null; }));
+}
+// Something happened the tests (or a later tutorial) may wait for.
+type Signal = { kind: 'assembled'; ok: boolean } | { kind: 'stopped'; reason: StopReason } | { kind: 'reset' } | { kind: 'slow-ended' };
+const listeners: ((s: Signal) => void)[] = [];
+function emit(s: Signal): void { for (const l of listeners) l(s); }
+
+async function waitWhileRunning(): Promise<void> {
+  for (let i = 0; i < 200 && runState === 'running'; i += 1) await new Promise((r) => setTimeout(r, 20));
+}
+
+// The machine no longer matches what is on screen: a new file.
+async function forgetMachine(): Promise<void> {
+  if (runState === 'running' || runState === 'input') await api.stop().catch(() => {});
+  assembledText = null;
+  lastGood = null;
+  lastAssembly = null;
+  edited = false;
+  runState = 'ready';
+  breakpoints.clear();
+  rows = [];
+  text.setRows([]);
+  lastRegs = null;
+  clearSelection();
+  consolePanel.clear();
+}
+
+// ---- assemble -------------------------------------------------------------------------
+
+async function saveAndAssemble(): Promise<boolean> {
+  if (busy || !open) return false;
+  const source = editor.text();
+  saveNote = '';
+  saveWarn = false;
+  try {
+    const saved = await api.saveFile({ path: file.path, name: file.name, text: source, format: file.format });
+    if (saved) {
+      file.path = saved.path;
+      file.name = saved.name;
+      dirty = editor.text() !== source; // typed on while the dialog was up
+      saveNote = '저장됨';
+    } else [saveNote, saveWarn] = ['저장하지 않음 (어셈블은 했습니다)', true];
+  } catch (e) {
+    [saveNote, saveWarn] = [(e as Error).message, true];
+  }
+  return assemble(source);
+}
+
+// The Editor's breakpoint lines to the engine, when they are not what it
+// holds (set, cleared, or moved with the text by an edit).  The engine sets
+// them again at every assemble by itself (docs/engine-protocol.md 5.6).
+async function sendBreakpointLines(): Promise<void> {
+  const lines = editor.breakpointLines();
+  const key = JSON.stringify(lines);
+  if (key === sentLines) return;
+  const r = await api.call('bp', { lines });
+  if (r.ok) { sentLines = key; takeBreakpoints(r.breakpoints); }
+}
+
+// The engine's answer -> the addresses on screen, and a word about lines
+// that hold no instruction (their dot stays: it takes effect once the line has code).
+function takeBreakpoints(list: { line: number; addr: number | null }[]): void {
+  breakpoints.clear();
+  for (const b of list) if (b.addr !== null) breakpoints.add(b.addr >>> 0);
+  for (const r of rows) r.breakpoint = breakpoints.has(r.addr);
+  text.setRows(rows);
+  const idle = list.filter((b) => b.addr === null).map((b) => b.line);
+  if (idle.length && current()) note = `${idle.join(', ')}행에는 명령이 없어 브레이크포인트가 걸리지 않습니다`;
+}
+
+const errorsOf = (list: ErrorItem[] | undefined) =>
+  (list ?? []).filter((e) => !e.warning).map((e) => ({ message: e.message, line: e.line, col: e.col }));
+
+// Assembles `source` into a fresh machine -- after assembling it in a second
+// engine first (main.ts, sim:check): a program with errors leaves the
+// machine on screen as it was, the program in it and where it had run to.
+async function assemble(source: string): Promise<boolean> {
+  busy = true;
+  let after: Signal | null = null;
+  note = '';
+  exportNote = '';
+  const failed = (list: typeof errors): false => {
+    errors = list;
+    edited = editor.text() !== assembledText;
+    editor.showErrors(errors.map((e) => e.line).filter((n) => n > 0));
+    if (narrow) view = 'editor'; // the errors are under the Editor
+    after = { kind: 'assembled', ok: false };
+    return false;
+  };
+  try {
+    if (runState === 'running' || runState === 'input') { slow?.cancel(); await api.stop().catch(() => {}); await waitWhileRunning(); }
+    const check = await api.check(source).catch(() => null);
+    if (check && !check.ok) return failed(errorsOf(check.errors).length ? errorsOf(check.errors) : [{ message: check.error, line: 0, col: 0 }]);
+    await sendBreakpointLines();
+    let r;
+    try {
+      r = await api.call('assemble', { source });
+    } catch (e) {
+      crashNote = (e as Error).message; // a crash (onCrashed says more) or a dead engine
+      return false;
+    }
+    crashNote = '';
+    if (!r.ok) { // (checked above; only without a second engine)
+      assembledText = null;
+      runState = 'ready';
+      return failed(errorsOf(r.errors).length ? errorsOf(r.errors) : [{ message: r.error, line: 0, col: 0 }]);
+    }
+    consolePanel.clear();
+    consolePanel.waitForInput(false);
+    steps = 0;
+    progress = null;
+    changedNow = [];
+    lastReason = 'limit';
+    errors = [];
+    rows = textRows(r.text);
+    assembledText = source;
+    edited = editor.text() !== source; // typed on while it assembled
+    takeBreakpoints(r.breakpoints);
+    lastGood = { source, name: file.name, path: file.path, format: file.format };
+    lastAssembly = { at: new Date(), instructions: rows.length };
+    editor.showErrors([]);
+    labels.clear();
+    for (const sym of r.symbols) labels.add(sym.name, sym.addr >>> 0);
+    lastDataEnd = Math.max(DATA_BASE, ...r.symbols.filter((x) => x.segment === 'data').map((x) => (x.addr >>> 0) + 4));
+    runState = 'ready';
+    text.setRows(rows);
+    const regs = await api.call('regs');
+    if (regs.ok) {
+      const now = toValues(regs);
+      registers?.update(now, null);
+      lastRegs = now;
+      text.setPc(now.pc);
+    }
+    if (selected >= 0 && !rows.some((x) => x.addr === selected)) clearSelection();
+    else showInspector();
+    text.setTab('text');
+    if (narrow) view = 'run';
+    after = { kind: 'assembled', ok: true };
+    return true;
+  } finally {
+    busy = false;
+    renderChrome();
+    if (after) emit(after);
+  }
+}
+
+// "N행으로 가기": the Editor (a narrow window: its tab), the line.
+function goToErrorLine(n: number): void {
+  if (narrow) showView('editor');
+  editor.goToLine(n);
+}
+
+// The errors of the last assemble: marked in the Editor's margin, listed in
+// the Assemble panel (renderAssemble).
+function renderErrors(): void {
+  editor.showErrors(errors.map((e) => e.line).filter((n) => n > 0));
+  asmKey = '';
+  renderAssemble();
+}
+
+function errorNotice(): HTMLElement {
+  const toLine = (n: number) => goToErrorLine(n);
+  const first = errors.find((e) => e.line > 0) ?? errors[0];
+  const go = h('button', { class: 'btn primary', type: 'button' }, first.line ? `${first.line}행으로 가기` : '고치러 가기');
+  go.addEventListener('click', () => (first.line ? toLine(first.line) : showView('editor')));
+  // RARS's own words (docs/engine-protocol.md 6.1): what students see in its docs and searches.
+  const items = errors.map((e) => {
+    const where = h('button', { class: 'linkbtn line', type: 'button', disabled: !e.line }, e.line ? `${e.line}행` : '');
+    where.addEventListener('click', () => { if (e.line) toLine(e.line); });
+    const source = e.line > 0 && e.line <= editor.view.state.doc.lines ? editor.view.state.doc.line(e.line).text.trim() : '';
+    return h('div', { class: 'item' }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '!'), where,
+      h('span', { class: 'msg' }, h('span', { class: 'what' }, withHex(e.message)), source ? code(source, 'src') : null));
+  });
+  const title = errors.length > 1 ? `코드에 오류가 ${errors.length}개 있습니다` : '코드에 오류가 있습니다';
+  const todo = (errors.length > 1 ? '위에서부터 하나씩 고친 뒤 Ctrl+S 키를 다시 누르세요.' : '아래 줄을 고친 뒤 Ctrl+S 키를 다시 누르세요.')
+    + (machineShown() ? ` ${narrow ? 'Run 탭' : '오른쪽'}에는 마지막으로 어셈블한 코드가 그대로 있습니다.` : '');
+  return h('div', { class: 'notice-host' },
+    notice({ title, body: todo, more: [h('div', { class: 'items' }, ...items), h('div', { class: 'row' }, go)] }));
+}
+
+// ---- running ----------------------------------------------------------------------------
+
+// Before F5 or F10: a program in the machine -- the last that assembled,
+// changed code or not (the band says which); before the first, assemble.
+async function ready(): Promise<boolean> {
+  if (busy) return false;
+  if (assembledText === null) {
+    if (!open) return false;
+    return saveAndAssemble();
+  }
+  return true;
+}
+
+async function runOrStop(): Promise<void> {
+  if (runState === 'running' || runState === 'input') return stop();
+  return run();
+}
+
+async function run(): Promise<void> {
+  if (!(await ready())) return;
+  if (runState === 'finished') { renderStatus(); return; }
+  if (speed === 'slow') return runSlow();
+  // The Editor's lines are the machine's program's only while its code is (current()):
+  // breakpoints set in changed code wait for the next assemble.
+  if (current()) await sendBreakpointLines().catch(() => {});
+  resumeWith = 'run';
+  runState = 'running';
+  steps = 0;
+  progress = null;
+  renderChrome();
+  await go(() => api.call('run', { backstep: false }));
+  if (switchTo === 'slow' && (runState as RunState) === 'paused') { switchTo = null; await runSlow(); }
+}
+
+async function step(): Promise<void> {
+  if (!(await ready())) return;
+  if (runState === 'finished' || runState === 'running' || runState === 'input') return;
+  if (current()) await sendBreakpointLines().catch(() => {});
+  resumeWith = 'step';
+  await go(() => api.call('step', {}));
+}
+
+async function go(call: () => Promise<RunReply>): Promise<RunReply | null> {
+  busy = true;
+  note = '';
+  exportNote = '';
+  const before = lastRegs;
+  let result: RunReply;
+  try {
+    result = await call();
+  } catch (e) {
+    busy = false; // the crash report (onCrashed) says what happened
+    crashNote ||= (e as Error).message;
+    renderChrome();
+    return null;
+  }
+  let reason: StopReason = 'limit';
+  try {
+    if (!result.ok) { note = result.error; runState = 'paused'; return result; }
+    reason = stopReason(result.reason);
+    const now = toValues(result);
+    if (resumeWith === 'step') steps += 1;
+    lastReason = reason;
+    // A slow run between two of its steps is still running.
+    runState = slow && reason === 'limit' ? 'running' : stateAfter(reason);
+    registers?.update(now, before);
+    changedNow = [...changedKeys(before, now)];
+    lastRegs = now;
+    text.setPc(now.pc);
+    showInspector();
+    if (result.reason === 'EXCEPTION' && result.message) consolePanel.append(`${result.message}${result.line ? ` (${result.line}행)` : ''}\n`);
+    // Stopped while it waited for input: the engine has undone that ecall
+    // (protocol 2, 7.3); the next Run or Step asks again.
+    if (result.input_cancelled) note = result.undone ? '입력을 기다리다 멈췄습니다 — 다시 실행하면 입력을 다시 받습니다'
+      : '입력을 기다리다 멈췄는데 되돌리지 못했습니다 — 다시 어셈블하세요 (Ctrl+S)';
+    consolePanel.waitForInput(false);
+    if (text.tab === 'data') void refreshData();
+    return result;
+  } finally {
+    busy = false;
+    renderChrome();
+    emit({ kind: 'stopped', reason });
+  }
+}
+
+/* Run at one line a second.  The window steps the engine itself, one
+   instruction per call, and waits a second in between; stopping (Esc)
+   cancels the wait at once.  Every step updates what a step updates:
+   registers, the Inspector, the Editor's line.  A breakpoint stops it
+   before its instruction; switching to Instant hands the rest to the engine. */
+async function runSlow(): Promise<void> {
+  resumeWith = 'run';
+  runState = 'running';
+  steps = 0;
+  let cancelled = false;
+  let wake: (() => void) | null = null;
+  slow = { cancel: () => { cancelled = true; wake?.(); } };
+  renderChrome();
+  try {
+    for (let first = true; !cancelled; first = false) {
+      if (!first && lastRegs && breakpoints.has(lastRegs.pc >>> 0)) { // stop before it, as the engine does
+        runState = 'paused';
+        lastReason = 'breakpoint';
+        return;
+      }
+      resumeWith = 'step';
+      const result = await go(() => api.call('step', {}));
+      resumeWith = 'run';
+      if (!result || !result.ok || stopReason(result.reason) !== 'limit') return; // the end, an error, a stop, a crash
+      if (cancelled) break;
+      runState = 'running';
+      renderChrome();
+      await new Promise<void>((done) => { wake = done; setTimeout(done, 1000); });
+    }
+    runState = 'paused';
+    lastReason = 'stopped';
+  } finally {
+    slow = null;
+    renderChrome();
+    emit({ kind: 'slow-ended' });
+  }
+  if (switchTo === 'fast') { switchTo = null; await run(); }
+}
+
+async function setSpeed(next: 'fast' | 'slow'): Promise<void> {
+  if (next === speed) return;
+  speed = next;
+  renderChrome();
+  if (runState !== 'running') return;
+  switchTo = next;
+  if (next === 'fast') slow?.cancel();   // runSlow() then goes on with run()
+  else await api.stop();                // run() then goes on with runSlow()
+}
+
+// The status bar's name for the yellow rows, in their yellow.
+function changedPart(): HTMLElement {
+  // The name the student writes (t0, fa0); the Registers panel beside it says both.
+  // (Both here too, "x5 t0", did not fit the status bar at 1280 and under: tests/e2e/fit.e2e.ts.)
+  const both = (key: string) => (key.startsWith('x') ? abiName(Number(key.slice(1))) : FP_ABI_NAMES[Number(key.slice(1))]);
+  const names = changedNow.slice(0, 3).flatMap((key, i) => (i ? [', ', code(both(key))] : [code(both(key))]));
+  const more = changedNow.length > 3 ? ` 외 ${changedNow.length - 3}개` : '';
+  return h('span', { class: 'changed' }, '방금 바뀜: ', ...names, more);
+}
+
+async function stop(): Promise<void> {
+  if (runState !== 'running' && runState !== 'input') return;
+  switchTo = null;
+  if (slow && runState === 'running') { slow.cancel(); return; } // the wait ends now; runSlow() says 'stopped'
+  const how = await api.stop(); // the run's own answer ('STOP') updates the window
+  if (how === 'killed') note = '엔진이 대답하지 않아 다시 시작했습니다';
+}
+
+// Reset: the program in the machine back to its start -- the last one that
+// assembled, as it was assembled, whatever the Editor holds now.  Also after
+// a crash.  The engine keeps the breakpoint lines.
+async function restart(): Promise<void> {
+  if (busy || lastGood === null) return;
+  const good = lastGood;
+  busy = true;
+  note = '';
+  exportNote = '';
+  [saveNote, saveWarn] = ['', false]; // Reset saves nothing
+  try {
+    if (runState === 'running' || runState === 'input') { slow?.cancel(); await api.stop().catch(() => {}); await waitWhileRunning(); }
+    let r;
+    try {
+      r = await api.call('assemble', { source: good.source });
+    } catch (e) {
+      crashNote = (e as Error).message;
+      return;
+    }
+    if (!r.ok) return; // it assembled before
+    crashNote = '';
+    assembledText = good.source;
+    edited = editor.text() !== good.source;
+    consolePanel.clear();
+    steps = 0;
+    progress = null;
+    changedNow = [];
+    lastReason = 'limit';
+    rows = textRows(r.text);
+    takeBreakpoints(r.breakpoints);
+    runState = 'ready';
+    text.setRows(rows);
+    const regs = await api.call('regs');
+    if (regs.ok) {
+      const now = toValues(regs);
+      registers?.update(now, null);
+      lastRegs = now;
+      text.setPc(now.pc);
+    }
+    if (selected >= 0 && !rows.some((x) => x.addr === selected)) clearSelection();
+    else showInspector();
+    if (text.tab === 'data') void refreshData();
+  } finally {
+    busy = false;
+    renderChrome();
+    emit({ kind: 'reset' });
+  }
+}
+
+// A line typed in the Console while the program waits for it.  The run or
+// step that waits is still on its way; it goes on by itself.
+async function giveInput(line: string): Promise<void> {
+  if (runState !== 'input') return;
+  runState = 'running';
+  consolePanel.waitForInput(false);
+  renderChrome();
+  await api.call('input', { text: line + '\n' });
+}
+
+// A breakpoint set or cleared in Text: the Editor's line of that word (the
+// gutter is where breakpoints live), then the engine.
+async function toggleBreakpoint(addr: number): Promise<void> {
+  const line = current() ? lineOf(addr) : null;
+  if (line === null) { note = '고친 코드에서는 Text 탭의 브레이크포인트를 바꿀 수 없습니다 — 먼저 어셈블하세요 (Ctrl+S)'; renderStatus(); return; }
+  const lines = new Set(editor.breakpointLines());
+  const on = !breakpoints.has(addr >>> 0);
+  if (on) lines.add(line); else lines.delete(line);
+  editor.setBreakpointLines([...lines]);
+  await sendBreakpointLines();
+  renderStatus();
+}
+
+// A breakpoint set or cleared in the Editor's gutter.  The engine gets the
+// lines at once; with changed code they apply from the next assemble.
+async function editorBreakpoint(_line: number, _on: boolean): Promise<void> {
+  note = '';
+  if (!current()) {
+    // Changed code: its lines are not the program's; they go to the engine with the next assemble.
+    if (machineShown()) note = '고친 코드의 브레이크포인트는 다시 어셈블하면(Ctrl+S) 적용됩니다';
+    renderStatus();
+    return;
+  }
+  if (busy || runState === 'running' || runState === 'input') { renderStatus(); return; } // sent before the next run or assemble
+  await sendBreakpointLines().catch(() => {});
+  renderStatus();
+}
+
+// ---- the Inspector ----------------------------------------------------------------------
+
+// A row chosen in Text pins the Inspector to it; otherwise it follows PC.
+function select(addr: number): void {
+  selected = addr;
+  text.setSelected(addr);
+  showInspector();
+  renderStatus();
+}
+
+function clearSelection(): void {
+  selected = -1;
+  text.setSelected(-1);
+  showInspector();
+}
+
+function showInspector(): void {
+  const x = (lastRegs ?? ZERO_REGS).x;
+  const pinned = selected >= 0 ? text.rowFor(selected) : undefined;
+  if (pinned) { inspector.show(pinned, x, true); return; }
+  const started = runState !== 'ready' || steps > 0;
+  const atPc = lastRegs && started ? text.rowFor(lastRegs.pc >>> 0) : undefined;
+  if (atPc) inspector.show(atPc, x, false);
+  else inspector.guide();
+}
+inspector.onFollow = () => { clearSelection(); renderStatus(); };
+
+// ---- Data ------------------------------------------------------------------------------
+
+// RARS's default memory map: .data from 0x10010000, the stack below 0x7fffeffc.  The data section is
+// as long as the program's data labels reach (at least 256 bytes, at most
+// 4 KB); the stack from sp to its top when sp points into it.
+const DATA_BASE = 0x10010000;
+const STACK_TOP = 0x7ffffffc; // RARS's stack base: the bytes above it are out of range
+
+async function readSection(kind: DataSection['kind'], from: number, to: number): Promise<DataSection | null> {
+  const m = await api.call('mem', { addr: from | 0, len: to - from });
+  if (!m.ok) return null;
+  const bytes = new Uint8Array((to - from));
+  for (let i = 0; i < bytes.length; i += 1) bytes[i] = parseInt(m.hex.slice(2 * i, 2 * i + 2), 16);
+  const view = new DataView(bytes.buffer);
+  const words = Array.from({ length: bytes.length / 4 }, (_, i) => view.getUint32(4 * i, true));
+  return { kind, from, to, words, bytes };
+}
+
+async function refreshData(): Promise<void> {
+  if (assembledText === null || runState === 'running' || runState === 'input') { if (assembledText === null) text.data.clear(); return; }
+  const dataLabels = lastDataEnd;
+  const end = Math.min(DATA_BASE + 4096, Math.max(DATA_BASE + 256, (dataLabels + 64 + 15) & ~15));
+  const sections: DataSection[] = [];
+  const data = await readSection('data', DATA_BASE, end);
+  if (data) sections.push(data);
+  const regs = lastRegs ?? ZERO_REGS;
+  const sp = regs.x[2] >>> 0;
+  if (sp < STACK_TOP && STACK_TOP - (sp & ~3) <= 0x10000) {
+    const stack = await readSection('stack', sp & ~3, STACK_TOP);
+    if (stack) sections.push(stack);
+  }
+  const pointers = [2, 8, 3].map((n) => ({ name: ['', '', 'sp', 'gp', '', '', '', '', 'fp'][n], value: regs.x[n] >>> 0 }));
+  text.data.show(sections, settings.dataBase, labels, pointers);
+}
+
+// ---- the caption buttons' patch -----------------------------------------------------------
+// Windows draws the minimise / maximise / close buttons on a patch the page
+// cannot paint (titleBarOverlay).  While a dialog's backdrop covers the
+// window (no first screen and no tutorial in this edition), the patch takes the colour white has under the same layers
+// (logic/overlay.ts), or it would stay a bright square at the top right;
+// white again after.  The buttons keep working throughout.
+let overlayNow = `${WHITE_PATCH.color} ${WHITE_PATCH.symbolColor}`; // the window's own at its start (src/main/main.ts)
+function updateOverlay(): void {
+  const b = document.body.classList;
+  const p = captionPatch(b.contains('first-screen'), b.contains('tutorial-on'), document.querySelector('dialog[open]') !== null);
+  if (`${p.color} ${p.symbolColor}` === overlayNow) return;
+  overlayNow = `${p.color} ${p.symbolColor}`;
+  void api.setOverlay(p);
+}
+new MutationObserver(updateOverlay).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'open'] });
+updateOverlay(); // the first screen is up before anything is watched
+
+// ---- keys -----------------------------------------------------------------------------------
+
+window.addEventListener('keydown', (e) => {
+  if (document.querySelector('dialog[open]')) return; // the dialog has the keys (Esc closes it)
+  const mod = e.ctrlKey || e.metaKey;
+  const inEditor = editorHost.contains(e.target as Node);
+  if (e.key === 'F5') { e.preventDefault(); void runOrStop(); return; }
+  if (e.key === 'F10') { e.preventDefault(); void step(); return; }
+  if (e.key === 'Escape') {
+    if (runState === 'running' || runState === 'input') { e.preventDefault(); void stop(); }
+    else if (selected >= 0) { clearSelection(); renderStatus(); }
+    return;
+  }
+  if (!mod) return;
+  const k = e.key.toLowerCase();
+  if (k === 's') { e.preventDefault(); if (inEditor) editor.requestSave(e.isComposing); else void saveAndAssemble(); }
+  else if (k === 'o') { e.preventDefault(); void openFile(); }
+  else if (k === '=' || k === '+') { e.preventDefault(); zoom += 1; applyFont(); }
+  else if (k === '-') { e.preventDefault(); zoom -= 1; applyFont(); }
+  else if (k === '0') { e.preventDefault(); zoom = 0; applyFont(); }
+}, true);
+
+// ---- events from the simulator ------------------------------------------------------------------
+
+api.onConsole((t) => consolePanel.append(t));
+// The program waits for a line: the run (or step) is still on its way, and
+// goes on by itself once giveInput() hands the engine the line.
+api.onInput(() => {
+  if (runState !== 'running' && !busy) return;
+  slow?.cancel(); // a slow run does not step on while it waits
+  runState = 'input';
+  consolePanel.waitForInput(true);
+  renderChrome();
+});
+api.onCrashed((message, cause, restarted) => {
+  crashNote = restarted ? `${message} (${cause}) — 엔진을 다시 시작했습니다. 다시 어셈블하세요 (Ctrl+S)` : `${message} (${cause})`;
+  assembledText = null;
+  runState = 'ready';
+  busy = false;
+  slow?.cancel();
+  consolePanel.waitForInput(false);
+  sentLines = ''; // a fresh engine holds no breakpoints yet
+  renderChrome();
+});
+api.onEngineState((state, detail) => {
+  engineState = state;
+  engineDetail = detail;
+  renderChrome();
+});
+
+// ---- start ----------------------------------------------------------------------------
+
+async function start(): Promise<void> {
+  settings = await api.getSettings();
+  const e = await api.engineState();
+  engineState = e.state;
+  engineDetail = e.detail;
+  applyFont();
+  measure();
+  new ResizeObserver(() => measure()).observe(document.body);
+  // fonts: a width measured in the code font before it had loaded is
+  // measured again (the Editor's 72 columns, the tables' columns).
+  document.fonts.addEventListener('loadingdone', () => measure());
+  void document.fonts.ready.then(() => measure());
+  renderChrome();
+  // The columns are measured in the mono font: again once it is in.
+  void document.fonts.ready.then(() => { text.fit(); registers?.fit(); renderChrome(); });
+  requestAnimationFrame(() => editor.view.focus()); // straight into the Editor: no first screen
+}
+void start();

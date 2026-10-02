@@ -1,0 +1,129 @@
+/* The Editor: errors that say what to do, breakpoints in its gutter, the
+   window's own dialogs, typing (Tab is four columns, Enter starts at 0),
+   and a first screen that keeps its shape. */
+
+import { expect, test } from '@playwright/test';
+
+import { launch, openAndAssemble, program, regHex, settled, statusText, side, textRow, type Running } from './harness.ts';
+
+let r: Running;
+test.beforeEach(async () => { r = await launch(); });
+test.afterEach(async () => { await r.close(); });
+
+const PROGRAM = 'main:\n  li t0, 5\n  li t1, 7\n\n  add t2, t0, t1\n  li a7, 10\n  ecall\n';
+// A click in the breakpoint gutter, level with the Editor's line `line`.
+const gutterAt = (line: number) => ({
+  click: async () => {
+    await side(r.page, 'Editor');
+    const at = (await r.page.locator('.cm-line').nth(line - 1).boundingBox())!;
+    const g = (await r.page.locator('.cm-bp-gutter').boundingBox())!;
+    await r.page.mouse.click(g.x + g.width / 2, at.y + at.height / 2);
+  },
+});
+
+test('an assembly error: under the Editor, what is wrong then what to do, and a mark unlike a breakpoint\'s', async () => {
+  const { page } = r;
+  await openAndAssemble(r, program(r.dir, 'bad.s', 'main:\n  li t0, 5\n  srll t1, t0, 1\n'));
+  const panel = page.locator('.asm');
+  await expect(panel.locator('h3')).toHaveText('코드에 오류가 있습니다');                    // what is wrong
+  await expect(panel.locator('.notice .say > p')).toHaveText('아래 줄을 고친 뒤 Ctrl+S 키를 다시 누르세요.'); // what to do
+  // The line's number twice at most: in the error and on the button.
+  expect(((await panel.locator('.notice').textContent()) ?? '').split('3행').length - 1).toBeLessThanOrEqual(2);
+  await expect(panel.locator('img.char')).toBeHidden(); // the words alone, right under the Editor
+  // RARS's own words (docs/engine-protocol.md 6.1).  (The MIPS edition named the slip, "혹시 srl?":
+  // its near-miss hints are not ported -- RARS's message already names the operator.)
+  await expect(panel.locator('.item .what')).toHaveText('"srll" is not a recognized operator');
+  await expect(panel.locator('.item .src')).toHaveText('srll t1, t0, 1');
+  await expect(page.locator('.cm-error-gutter .cm-error-mark')).toHaveText('!');
+  await expect(page.locator('.cm-bp-dot')).toHaveCount(0);
+  await panel.getByRole('button', { name: '3행으로 가기' }).click();
+  expect(await page.evaluate(() => document.getSelection()?.anchorNode?.parentElement?.closest('.cm-line')?.textContent)).toBe('  srll t1, t0, 1');
+});
+
+test('breakpoints from the Editor\'s gutter: set before assembling, kept, stopped at, shown in Text', async () => {
+  const { page } = r;
+  await openAndAssemble(r, program(r.dir, 'p.s', PROGRAM));
+  await gutterAt(5).click(); // add t2 ...
+  await expect(page.locator('.cm-bp-dot')).toHaveCount(1);
+  await expect(page.locator('.trow.bp-on .lno')).toHaveText('5');
+  await page.keyboard.press('F5');
+  await settled(page);
+  expect(await statusText(page)).toContain('브레이크포인트');
+  expect(await regHex(page, 'x6')).toBe('0x00000007');
+  expect(await regHex(page, 'x7')).toBe('0x00000000');
+  await expect(page.locator('.cm-pc-line')).toHaveText('  add t2, t0, t1');
+
+  // A line with no instruction: its dot stays (it applies once the line has code: protocol 2,
+  // docs/engine-protocol.md 5.6), and the status bar says it stops nothing for now.
+  await gutterAt(4).click();
+  await expect(page.locator('.cm-bp-dot')).toHaveCount(2);
+  await expect(page.locator('.status')).toContainText('4행에는 명령이 없어 브레이크포인트가 걸리지 않습니다');
+  await expect(page.locator('.trow.bp-on')).toHaveCount(1);
+
+  // Set in Text: the Editor shows it on the source line.
+  await page.getByRole('button', { name: /Reset/ }).click();
+  await settled(page);
+  await side(page, 'Run');
+  await (await textRow(page, await page.locator('.trow', { has: page.locator('.lno', { hasText: /^2$/ }) }).getAttribute('data-addr') ?? '')).locator('.bp').click();
+  await expect(page.locator('.cm-bp-dot')).toHaveCount(3);
+  await expect(page.locator('.trow.bp-on')).toHaveCount(2);
+});
+
+test('a breakpoint set while the code is unassembled moves with the text and applies at the next assemble', async () => {
+  const { page } = r;
+  await openAndAssemble(r, program(r.dir, 'p.s', PROGRAM));
+  await side(page, 'Editor');
+  await page.locator('.cm-content').click();
+  await page.keyboard.press('Control+Home');
+  await page.keyboard.insertText('# 맨 위에 한 줄\n'); // now dirty: the Run side waits
+  await gutterAt(6).click();              // add t2 is line 6 now
+  await expect(page.locator('.cm-bp-dot')).toHaveCount(1);
+  await page.keyboard.press('Control+Home');
+  await page.keyboard.insertText('# 또 한 줄\n'); // the mark moves to line 7
+  await page.keyboard.press('Control+s');
+  await expect(page.locator('.run-grid')).toBeVisible();
+  await expect(page.locator('.trow.bp-on .lno')).toHaveText('7');
+});
+
+test('the window\'s own dialogs: a new file is asked about even when saved; unsaved text before opening another', async () => {
+  const { page } = r;
+  await openAndAssemble(r, program(r.dir, 'p.s', PROGRAM));
+  await page.getByTitle('New file').click();
+  const dialog = page.locator('dialog.ask');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('img.char')).toHaveCount(0); // no character in this edition
+  await expect(dialog).toContainText('저장되어 있습니다');
+  await dialog.getByRole('button', { name: '돌아가기' }).click();
+  await expect(page.locator('.titlebar .file')).toContainText('p.s');
+
+  await side(page, 'Editor');
+  await page.locator('.cm-content').click();
+  await page.keyboard.insertText('# 바꿈\n');
+  await page.getByTitle('Open file (Ctrl+O)').click();
+  await expect(dialog).toContainText('저장하지 않은 변경이 있습니다');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await page.getByTitle('New file').click();
+  await dialog.getByRole('button', { name: '버리고 계속' }).click();
+  await expect(page.locator('.titlebar .file')).toContainText('untitled.s');
+  expect(await page.locator('.cm-content').textContent()).toBe('');
+});
+
+test('typing: Tab is four columns, Shift+Tab takes four back, Enter starts at column 0', async () => {
+  const { page } = r;
+  await page.locator('.cm-content').click();
+  const doc = () => page.evaluate(() => [...document.querySelectorAll('.cm-line')].map((l) => l.textContent).join('\n'));
+  await page.keyboard.press('Tab');
+  await page.keyboard.insertText('li');
+  await page.keyboard.press('Tab');
+  await page.keyboard.insertText('t0, 5');
+  await page.keyboard.press('Enter');
+  await page.keyboard.insertText('x');
+  expect(await doc()).toBe('    li  t0, 5\nx');
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Tab');
+  expect(await doc()).toBe('        li  t0, 5\n    x');
+  await page.keyboard.press('Shift+Tab');
+  expect(await doc()).toBe('    li  t0, 5\nx');
+});
+
