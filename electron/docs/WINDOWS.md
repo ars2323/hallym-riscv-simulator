@@ -38,8 +38,10 @@ Measured on the Windows runner, each with a negative control that fails:
   control, a console program started with `Start-Process`, is seen), and no console window shows. **But the
   control fails to fail:** on the CI runner (windows-latest) every engine has its own `conhost.exe` and no
   window shows with `windowsHide` or without -- under Playwright (87a9531) and with the app started as Explorer
-  starts it (`tools/windows/console-flash.ps1`, 5c13ba2). The runner shows no window for a console child whose
-  stdio is pipes, so it cannot show the flash `windowsHide` prevents, and the check proves nothing there.
+  starts it (`tools/windows/console-flash.ps1`, 5c13ba2, 5b5726c). The same runner does show the console of the
+  runtime's `java.exe` started on its own (a Windows Terminal window, 5b5726c): it shows none for a console child
+  of the app whose stdio is pipes, so it cannot show the flash `windowsHide` prevents, and the check proves
+  nothing there.
   `console-flash.ps1` says so in every run (BLOCKED) instead of passing.
 - **Killing.** Windows has no signals: `kill('SIGKILL')` is `TerminateProcess`; the exit is reported in about
   10 ms and the process is gone. Control: a polite end (closing stdin) against an engine that ignores it leaves

@@ -302,6 +302,10 @@ test('a clip that cannot play: the brand\'s navy, quietly -- no still, no video,
   const { page } = r;
   try {
     await page.waitForSelector('.wback.playing');
+    // The engine's start is said in the status bar too, on its own time (the MIPS edition had
+    // none): what the clip must not change is the status once the engine is ready (CI, 5b5726c:
+    // read while starting, "엔진 준비 중…" became "준비" meanwhile).
+    await expect(page.locator('.status')).not.toContainText('엔진 준비 중', { timeout: 30_000 });
     const status = await page.locator('.status').innerText();
     await page.evaluate(() => { const v = document.querySelector('.wback video') as HTMLVideoElement; v.src = v.src.replace('start.webm', 'missing.webm'); });
     await page.waitForSelector('.wback.failed');
