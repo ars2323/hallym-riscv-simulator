@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '21.0.12'
       - name: SessionStart hook from scratch (same script every Claude session runs)
         run: |
           echo "RARS_HOME=$RUNNER_TEMP/rars" >> "$GITHUB_ENV"

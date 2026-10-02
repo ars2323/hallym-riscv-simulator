@@ -1,2 +1,5 @@
 probe/build/
 __pycache__/
+electron/node_modules/
+electron/build/
+electron/test-results/
