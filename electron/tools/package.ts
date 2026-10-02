@@ -37,6 +37,7 @@ import path from 'node:path';
 
 import { LICENSE_SOURCES } from '../src/main/paths.ts';
 import { nodeOptions, rendererOptions, writeThirdParty } from './build-ui.ts';
+import { JAVA_MODULES } from './java-modules.ts';
 
 const root = path.join(import.meta.dirname, '..');
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -48,8 +49,6 @@ const dirOnly = process.argv.includes('--dir');
 export const APP_ID = 'kr.ac.hallym.riscv-simulator.electron';
 const engineStage = path.join(root, 'build/package/engine');
 const repo = path.join(root, '..');
-// The modules RARS needs (probe/REPORT.md: java.desktop cannot be left out without changing RARS).
-export const JAVA_MODULES = ['java.base', 'java.prefs', 'java.desktop'];
 
 async function stageApp(): Promise<void> {
   rmSync(stage, { recursive: true, force: true });

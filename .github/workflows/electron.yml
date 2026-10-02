@@ -101,6 +101,9 @@ jobs:
       - name: The editor's keyword table is what RARS's source says
         if: ${{ !cancelled() }}
         run: node tools/gen-op-table.ts --check
+      - name: The engine needs no Java module the installed runtime lacks (jdeps; control a java.util.logging class)
+        if: ${{ !cancelled() }}
+        run: node tools/check-java-modules.ts
       - name: Every e2e test (a real window, xvfb)
         if: ${{ !cancelled() }}
         env:

@@ -259,26 +259,44 @@ def stop_many(q, n=200):
     """Stop a running loop n times; every reply must say STOP."""
     bad = []
     for i in range(n):
-        q.call("assemble", source=case("forever.s"))
-        rid = q.send("run")
-        time.sleep(0.005)
-        q.call("stop")
-        r = q.reply(rid, timeout=5)
-        if r["reason"] != "STOP":
-            bad.append(r["reason"])
+        if stop_once(q) != "STOP":
+            bad.append("null")
     assert not bad, f"{len(bad)}/{n} stops said {sorted(set(bad))}"
     return n
 
 
+def stop_once(q):
+    q.call("assemble", source=case("forever.s"))
+    rid = q.send("run")
+    time.sleep(0.005)
+    q.call("stop")
+    r = q.reply(rid, timeout=5)
+    return r["reason"] if r["reason"] is not None else "null"
+
+
 def check_stop_race():
-    """RARS's setStop() race (null reason, about 1 stop in 20): the wrapper must cover it."""
-    p = Probe()
-    n = stop_many(p)
-    p.close()
-    record("every stop says STOP (RARS's setStop race covered)", "works", f"{n} stops, all STOP")
+    """RARS's setStop() race (a null reason): the wrapper must cover it.
+
+    How often the race comes depends on the machine (5 to 21 in 200 stops in a
+    development container, rarer on a CI runner: 0 in 200 once, 5a90f3c).  So
+    the control comes first and runs until the race shows (at most 3000
+    stops): it proves the race happens here, and how often; the check then
+    runs five times as many stops as that took, at least 200."""
     raw = Probe(jvm_args=["-Dprobe.rawStopReason=true"])
-    must_fail("without the wrapper's cover, some stop says null", lambda: stop_many(raw))
+    took = None
+    for i in range(1, 3001):
+        if stop_once(raw) != "STOP":
+            took = i
+            break
     raw.close()
+    if took is None:
+        print("[ BAD ] negative control did not fail: without the wrapper's cover, some stop says null (3000 stops)", flush=True)
+        sys.exit("negative control 'without the wrapper's cover, some stop says null' passed, so its check is meaningless")
+    p = Probe()
+    n = stop_many(p, max(200, 5 * took))
+    p.close()
+    record("every stop says STOP (RARS's setStop race covered)", "works",
+           f"{n} stops, all STOP; without the cover the first null came at stop {took}")
 
 
 def check_backstep(p):
