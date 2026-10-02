@@ -152,6 +152,11 @@ async function walk(page: Page, how: 'do' | 'skip'): Promise<void> {
     if (how === 'skip') await skip(page); else await act();
     if (RESULT.has(n)) {
       await checkStep(page, n, phase, true); // the result beat: on screen, waited for
+      // Step 5 ran the add it pointed at: t3 (x28) is the yellow row, 5 + 7.
+      if (n === 5) {
+        await expect(page.locator('.rrow[data-reg="x28"]'), 'step 5: add t3, t1, t2 ran').toHaveClass(/chg/);
+        expect(await page.locator('.rrow[data-reg="x28"] .hex').innerText()).toBe('0x0000000c');
+      }
       // Keys the step asked for do nothing now; → goes on.
       await page.keyboard.press('F10');
       await page.waitForTimeout(200);

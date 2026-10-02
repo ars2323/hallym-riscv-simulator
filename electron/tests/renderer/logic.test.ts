@@ -3,6 +3,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import { scrollToShow, visibleRange } from '../../src/renderer/app/logic/virtual.ts';
+
 import {
   changedKeys, fpCells, registerRows, stateAfter, stopMessage, stopReason, textRows, WINDOW_GROUPS, ZERO_REGS, type RegisterValues,
 } from '../../src/renderer/app/logic/machine.ts';
@@ -61,4 +63,22 @@ test('what a stop means', () => {
   assert.equal(stateAfter('breakpoint'), 'paused');
   assert.match(stopMessage('breakpoint', '0x00400008'), /`0x00400008`/);
   assert.match(stopMessage('input', ''), /입력/);
+});
+
+// (The MIPS edition's tests of the virtual list, which Text and Data use as they are.)
+test('visibleRange: the rows in view and ten on each side, clipped to the list', () => {
+  assert.deepEqual(visibleRange(0, 220, 22, 4758), { first: 0, last: 20 });
+  assert.deepEqual(visibleRange(2200, 220, 22, 4758), { first: 90, last: 120 });
+  assert.deepEqual(visibleRange(2200 + 11, 220, 22, 4758), { first: 90, last: 121 }); // a row half in view counts
+  assert.deepEqual(visibleRange(22 * 4750, 220, 22, 4758), { first: 4740, last: 4758 });
+  assert.deepEqual(visibleRange(0, 220, 22, 0), { first: 0, last: 0 });
+  assert.deepEqual(visibleRange(0, 220, 22, 5, 0), { first: 0, last: 5 });
+});
+
+test('scrollToShow: moves only as far as needed, with a margin of two rows', () => {
+  assert.equal(scrollToShow(10, 0, 440, 22), 0);               // already in view
+  assert.equal(scrollToShow(30, 0, 440, 22), (30 + 3) * 22 - 440); // below: bottom edge plus margin
+  assert.equal(scrollToShow(5, 400, 440, 22), 3 * 22);         // above: top edge minus margin
+  assert.equal(scrollToShow(0, 400, 440, 22), 0);              // never negative
+  assert.equal(scrollToShow(17, 0, 440 - 300, 22), (17 + 3) * 22 - 140); // a sheet covering 300 px
 });
