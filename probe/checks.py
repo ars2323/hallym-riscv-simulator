@@ -255,6 +255,32 @@ def check_stop(p):
     must_fail("forever.s needs stop", ctl)
 
 
+def stop_many(q, n=200):
+    """Stop a running loop n times; every reply must say STOP."""
+    bad = []
+    for i in range(n):
+        q.call("assemble", source=case("forever.s"))
+        rid = q.send("run")
+        time.sleep(0.005)
+        q.call("stop")
+        r = q.reply(rid, timeout=5)
+        if r["reason"] != "STOP":
+            bad.append(r["reason"])
+    assert not bad, f"{len(bad)}/{n} stops said {sorted(set(bad))}"
+    return n
+
+
+def check_stop_race():
+    """RARS's setStop() race (null reason, about 1 stop in 20): the wrapper must cover it."""
+    p = Probe()
+    n = stop_many(p)
+    p.close()
+    record("every stop says STOP (RARS's setStop race covered)", "works", f"{n} stops, all STOP")
+    raw = Probe(jvm_args=["-Dprobe.rawStopReason=true"])
+    must_fail("without the wrapper's cover, some stop says null", lambda: stop_many(raw))
+    raw.close()
+
+
 def check_backstep(p):
     p.call("assemble", source=case("hello.s"))
     a = p.call("step"); b = p.call("step"); c = p.call("step")
@@ -469,6 +495,7 @@ def main():
     check_repeat(Probe(jvm_args=["-Dprobe.skipStdioReset=true"]))
     check_breakpoints_survive(Probe(jvm_args=["-Dprobe.v1Breakpoints=true"]))
     check_stop_input(Probe(jvm_args=["-Dprobe.v1StopInput=true"]))
+    check_stop_race()
     os.makedirs(os.path.join(HERE, "results"), exist_ok=True)
     with open(os.path.join(HERE, "results", "checks.json"), "w") as f:
         json.dump(results, f, indent=1)

@@ -57,7 +57,7 @@
  {
   "check": "stop a running program",
   "verdict": "works",
-  "evidence": "reply 3.0 ms after stop, 24714 instructions ran, stepping resumes afterwards"
+  "evidence": "reply 2.1 ms after stop, 120757 instructions ran, stepping resumes afterwards"
  },
  {
   "check": "undo one step (RARS back-stepper)",
@@ -128,5 +128,10 @@
   "check": "stop while waiting for input (engine undoes the ecall)",
   "verdict": "works",
   "evidence": "STOP reply has input_cancelled+undone; a0 stays 77, pc=0x400008 is the ecall; ReadString buffer stays 58595a00; same with backstep:false"
+ },
+ {
+  "check": "every stop says STOP (RARS's setStop race covered)",
+  "verdict": "works",
+  "evidence": "200 stops, all STOP"
  }
 ]

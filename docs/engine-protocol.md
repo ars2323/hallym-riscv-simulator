@@ -440,6 +440,10 @@ run 에서도 된다(엔진이 취소되는 순간 그 ecall 의 기록을 켠�
   - 엔진 버그 수정(프로토콜 변경 아님): `mem` 이 `0x80000000` 에서 끝나는 구간을 읽으면 루프의
     `addr + len` 이 int 로 넘쳐 **빈 `hex` 를 `ok:true` 로** 돌려주었다. 이제 범위 밖 바이트에서
     `address` 오류다(`electron/tests/sim/process.test.ts` 의 `mem:` 검사, 옛 루프에서 실패 확인).
+  - 엔진 버그 수정(프로토콜 변경 아님): RARS 의 `SimThread.setStop()` 이 `stop` 을 세운 **뒤에**
+    멈춘 이유를 적어서, 그 사이에 루프가 끝나면 STOP 이 `reason:"null"` 로 왔다(200번에 9번, CI 에서 처음
+    드러남). RARS 는 고치지 않고, 래퍼가 자기가 stop 을 요청했음을 기억해 `STOP` 으로 답한다
+    (`checks.py` 의 `every stop says STOP`, 대조 `-Dprobe.rawStopReason=true` 에서 실패 확인).
   - 검사: `checks.py` 의 `breakpoint survives re-assemble`, `stop while waiting for input`. 엔진을
     `-Dprobe.v1Breakpoints=true` / `-Dprobe.v1StopInput=true` 로 띄우면 버전 1 동작으로 돌아가고,
     두 검사가 실제로 실패하는 것을 음성 대조로 확인한다.

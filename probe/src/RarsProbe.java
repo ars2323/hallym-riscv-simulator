@@ -180,7 +180,7 @@ public class RarsProbe {
             case "input": consoleIn.feed(((String) req.get("text")).getBytes(StandardCharsets.UTF_8)); return "\"ok\":true,\"waiting\":" + consoleIn.waiting;
             case "stop":
                 // RARS keeps a stale thread reference after a run ends; only stop a live run.
-                if (busy) Simulator.getInstance().stopExecution();
+                if (busy) { stopRequested = true; Simulator.getInstance().stopExecution(); }
                 return "\"ok\":true,\"was_running\":" + busy;
             case "status": return "\"ok\":true,\"busy\":" + busy + ",\"waiting\":" + consoleIn.waiting + ",\"terminated\":" + terminated;
             case "quit": return "\"ok\":true";
@@ -213,6 +213,7 @@ public class RarsProbe {
                 int max = "step".equals(cmd) ? 1 : (req.containsKey("max") ? Json.num(req.get("max")) : -1);
                 pending = new Pending(idJson(req.get("id")), "step".equals(cmd), !Boolean.FALSE.equals(req.get("backstep")));
                 consoleIn.uncancel();
+                stopRequested = false;
                 busy = true;
                 Simulator.getInstance().startSimulation(pending.pcBefore, max, breakpoints);
                 return null; // reply is sent by finish() on the simulator thread
@@ -283,6 +284,10 @@ public class RarsProbe {
         Pending(Object id, boolean isStep, boolean backstep) { this.id = id; this.isStep = isStep; this.backstep = backstep; }
     }
     static volatile Pending pending;
+    // RARS's SimThread.setStop() sets `stop` before `constructReturnReason`: a run that sees
+    // `stop` in between ends with a null reason (measured: 9 of 200 stops).  RARS is not
+    // ours to fix; the wrapper knows it asked for a stop, and says STOP.
+    static volatile boolean stopRequested = false;
 
     static void finish(SimulatorNotice n) {
         Pending pd = pending;
@@ -291,6 +296,7 @@ public class RarsProbe {
         System.out.flush();
         StringBuilder sb = new StringBuilder("{\"id\":" + pd.id + ",\"ok\":true");
         Simulator.Reason r = n.getReason();
+        if (r == null && stopRequested && !n.getDone() && !Boolean.getBoolean("probe.rawStopReason")) r = Simulator.Reason.STOP;
         sb.append(",\"reason\":\"").append(r).append('"');
         SimulationException e = n.getException();
         if (n.getDone()) {
