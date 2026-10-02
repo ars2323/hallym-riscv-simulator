@@ -37,18 +37,31 @@ Measured on the Windows runner, each with a negative control that fails:
 - **Killing.** Windows has no signals: `kill('SIGKILL')` is `TerminateProcess`; the exit is reported in about
   10 ms and the process is gone. Control: a polite end (closing stdin) against an engine that ignores it leaves
   it running.
-- **No orphans.** The app killed outright (Task Manager, a crash: `taskkill /F` on its main process, no goodbye)
-  while a program runs: both engines (the simulator's and the checker's, two `java.exe`, children of the main
-  process, started directly -- no shell, no `.bat`, so no grandchild) leave by themselves. Three ways out,
-  whichever comes first: the engine watches its parent (`-Dparent.pid`, Java's `ProcessHandle.onExit`, in
-  java.base, and leaves with `Runtime.halt`, which no shutdown hook can hold up); it leaves at the end of its
-  stdin; and on Windows the job object libuv puts every non-detached child of the main process in
-  (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, its handle not inherited) is killed by the kernel when the main
-  process's handles close. The e2e test kills the process `main.ts` runs in, the engines' parent -- not the
-  one Playwright started: with the installed app on Windows that was its parent, and killing it left the
-  whole app running (CI, 2026-10-02: Playwright's process 5692, main.ts and both engines' parent 1188). Each
-  way is checked alone, the other two off; control: all three off, the engines stay
-  (`tests/e2e/engine-process.e2e.ts`, `tools/engine-windows.ts`).
+- **No orphans.** The app killed outright (Task Manager, a crash: `taskkill /F` on its main process, no `/T`, no
+  goodbye) while a program runs: both engines leave by themselves. Two engines, two `java.exe`, by design: the
+  simulator's and the checker's (it assembles the Editor's text as it is typed), one JVM each because RARS keeps
+  its machine in static fields -- one RARS per JVM -- so checking never touches the program being run (about
+  64 MB resident each, measured on Linux). Both are children of the main process, `java.exe` itself (no shell,
+  no `.bat`, no launcher: `tests/sim/process.test.ts` pins it). Three ways out, whichever comes first, each
+  checked alone with the other two off, and which way an engine left by read from its trace
+  (`tests/e2e/engine-process.e2e.ts`, `tools/engine-windows.ts`):
+  1. **The parent watch**, the one that always works: the engine watches its parent (`-Dparent.pid`, Java's
+     `ProcessHandle.onExit`, in java.base) and leaves with `Runtime.halt`, which no shutdown hook can hold up.
+  2. **The end of stdin** -- not certain on Windows: a copy of the pipe's write end held anywhere, and no end of
+     file ever comes.
+  3. **The job object** libuv puts every child of the main process in (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, its
+     handle not inherited): the kernel kills what is in it when the main process's handles close. Not a
+     guarantee, and not counted on: (a) a child started detached is not in it; (b) only the children libuv
+     adds are, not *their* children (`JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK`): a `.bat` or launcher in between
+     would leave the JVM outside; (c) when the app itself runs in another job that does not allow breakaway (a
+     management agent on a lab PC can do that), `AssignProcessToJobObject` fails and libuv carries on without
+     it, saying nothing.
+
+  The e2e test kills the process `main.ts` runs in, the engines' parent. The run of 651cf16 killed the one
+  Playwright started instead -- its parent, which left the whole app running, engines included, as it should:
+  that was a test that killed the wrong process, not an orphan. Control: all three ways off, both engines stay.
+  The app as a student starts it (the installer's 지금 실행하기) is killed the same way in
+  `tools/windows/check-installer-ui.ps1`, with its process tree.
 - **Korean through stdio.** Every stream is UTF-8 whatever the code page (`-Dfile.encoding=UTF-8` and the
   stdout/stderr encodings). Control: `-Dfile.encoding=COMPAT` (the code page) garbles a Korean round trip.
 - **Cold start**: a fresh engine ready in about 0.22–0.24 s (median of ten), the first assemble answered in

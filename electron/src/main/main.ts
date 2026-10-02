@@ -116,6 +116,8 @@ async function main(): Promise<void> {
   const extraArgs = (process.env.ENGINE_JAVA_ARGS ?? '').split(/\s+/).filter(Boolean);
   const transport = (role: 'main' | 'checker') => () => engineTransport({
     // Each engine its own RARS settings folder: two JVMs never share java.util.prefs' lock files.
+    // Its stderr into a log of this run (the run's folder), never into the Console.
+    logFile: path.join(runDir, `engine-${role}.log`),
     ...where, prefsDir: path.join(runDir, `rars-prefs-${role}`), extraArgs: [`-Dhallym.engine=${role}`, ...extraArgs],
     windowsHide: process.env.ENGINE_WINDOWS_HIDE !== '0',
     detached: process.env.ENGINE_DETACHED === '1',

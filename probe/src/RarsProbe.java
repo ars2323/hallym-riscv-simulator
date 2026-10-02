@@ -29,11 +29,6 @@ public class RarsProbe {
     // ---- protocol channel: the real fd 1, never touched by RARS ----
     static final PrintStream proto = new PrintStream(new FileOutputStream(FileDescriptor.out), false, StandardCharsets.UTF_8);
 
-    // java.util.prefs logs to stderr -- the student's Console -- when it creates the (per run, so
-    // every time new) preferences directory: "INFO: Created user preferences directory.", which
-    // opened the Console at a random moment of the start.  RARS's settings are not the student's
-    // business: its logger is off.  (A field: a logger only referenced weakly loses its level.)
-    static final java.util.logging.Logger PREFS_LOG = java.util.logging.Logger.getLogger("java.util.prefs");
 
     // -Dprobe.trace=<file>: what the engine saw of its end (the orphan checks read it when one fails).
     static void trace(String what) {
@@ -111,6 +106,25 @@ public class RarsProbe {
         @Override public void close() { flush(); }
     }
 
+    // ---- System.err: whose words are they? ----
+    // RARS gives the program's fd 2 whatever System.err is (SystemIO.setupStdio, at every assemble and
+    // program end), and the program runs on RARS's simulator thread ("RISCV", Simulator.simulate):
+    // what that thread writes is the program's, an "err" event for the Console.  Anything else on
+    // System.err -- java.util.logging (java.util.prefs' "Created user preferences directory", which
+    // opened the Console at a start), a library's warning, a stack trace -- is not the student's:
+    // it goes to the real fd 2, which the app keeps in a log file and never shows.  The student hears
+    // of errors only through the protocol's answers on fd 1.
+    static final String SIM_THREAD = "RISCV";
+    static final class ErrRouter extends OutputStream {
+        private final OutputStream program = new ConsoleOut("err");
+        private final OutputStream log = new FileOutputStream(FileDescriptor.err);
+        private OutputStream to() { return SIM_THREAD.equals(Thread.currentThread().getName()) ? program : log; }
+        @Override public synchronized void write(int b) throws IOException { to().write(b); }
+        @Override public synchronized void write(byte[] b, int off, int len) throws IOException { to().write(b, off, len); }
+        @Override public synchronized void flush() throws IOException { program.flush(); log.flush(); }
+        @Override public void close() throws IOException { flush(); }
+    }
+
     // RARS closes System.out when a program terminates (SystemIO.resetFiles); keep ours usable.
     static final class NonClosingPrintStream extends PrintStream {
         NonClosingPrintStream(OutputStream o) { super(o, true, StandardCharsets.UTF_8); }
@@ -156,9 +170,8 @@ public class RarsProbe {
         // Every path in RARS that falls back to the process stdio now hits our console streams.
         System.setIn(consoleIn);
         System.setOut(new NonClosingPrintStream(new ConsoleOut("out")));
-        System.setErr(new NonClosingPrintStream(new ConsoleOut("err")));
+        System.setErr(new NonClosingPrintStream(new ErrRouter()));
 
-        PREFS_LOG.setLevel(java.util.logging.Level.OFF);
         Globals.initialize();
         // Unblock a program waiting for console input when Stop is requested.
         Simulator.getInstance().addStopListener(s -> consoleIn.cancel());

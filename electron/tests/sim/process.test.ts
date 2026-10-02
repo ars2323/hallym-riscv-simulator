@@ -15,6 +15,7 @@
    (The MIPS edition's process.test.ts, for the JVM engine.) */
 
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
 import { CRASH_MESSAGE, EngineCrashed, EngineDead, Simulator, type CrashReport, type EngineState } from '../../src/sim/host.ts';
@@ -212,13 +213,41 @@ test('6: stop() kills an engine that does not answer, and a fresh one starts', a
 });
 
 // tests/e2e/engine-process.e2e.ts sees the console window and the orphans on
-// Windows; this says the same of the options on every platform (the mutants
-// run on Linux).
-test('7: java itself, no console window, not detached, told the parent\'s pid', () => {
+// Windows; this pins what they rest on, on every platform (the mutants run on
+// Linux).  The job object libuv gives Node's children (Windows) holds only
+// a child that is not detached, and only that child: a JVM started through a
+// shell, a .bat or a launcher would be a grandchild, outside it
+// (JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK) -- so java itself, no shell.
+test('7: java itself, no shell, no console window, not detached, told the parent\'s pid', () => {
   const cmd = { java: 'java', classpath: 'x' };
   const o = spawnOptions(cmd, {});
   assert.equal(o.shell, false);
   assert.equal(o.windowsHide, true);
-  assert.equal(o.detached, false);
+  assert.notEqual(o.detached, true);
   assert.ok(engineArgs(cmd).includes(`-Dparent.pid=${process.pid}`));
+});
+
+test('7: the executable is java (java.exe), not a .bat, .cmd or launcher -- from the source tree and installed', async () => {
+  const saved = { ENGINE_JAVA: process.env.ENGINE_JAVA, SPIM_BUNDLE: process.env.SPIM_BUNDLE };
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  try {
+    delete process.env.ENGINE_JAVA;
+    delete process.env.SPIM_BUNDLE;
+    // A fresh copy of the module each time (it reads SPIM_BUNDLE when loaded).
+    const fresh = (q: string) => import(new URL(`../../src/main/paths.ts?${q}`, import.meta.url).href) as Promise<typeof import('../../src/main/paths.ts')>;
+    const dev = await fresh('source');
+    assert.match(path.basename(dev.engine().java), /^java$/);
+    process.env.SPIM_BUNDLE = '1';
+    (process as { resourcesPath?: string }).resourcesPath = path.join('C:', 'Programs', 'Hallym RISC-V', 'resources');
+    const installed = await fresh('installed');
+    for (const p of ['win32', 'linux']) {
+      Object.defineProperty(process, 'platform', { value: p });
+      const java = installed.engine().java;
+      assert.match(path.basename(java), p === 'win32' ? /^java\.exe$/ : /^java$/, java);
+      assert.ok(java.includes(path.join('engine', 'runtime', 'bin')), java);
+    }
+  } finally {
+    Object.defineProperty(process, 'platform', platform);
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
 });

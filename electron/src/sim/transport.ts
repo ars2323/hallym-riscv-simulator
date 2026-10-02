@@ -12,6 +12,7 @@
    classes and the RARS jar (src/main/paths.ts engine()). */
 
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process';
+import { createWriteStream } from 'node:fs';
 
 import type { EngineMessage } from './protocol.ts';
 
@@ -40,12 +41,17 @@ export interface EngineCommand {
   // Windows: java.exe is a console program, and started from a window (no
   // console of its own) it gets a new console window -- a black box flashing
   // up at every start and restart.  Hidden unless false (ENGINE_WINDOWS_HIDE=0,
-  // the negative control of tests/e2e/windows.e2e.ts).
+  // the negative control of tests/e2e/engine-process.e2e.ts).
   windowsHide?: boolean;
   // Outside this process's Windows job object (libuv puts every child in one
   // that kills it when this process dies).  Only the negative control of the
   // orphan checks sets it (ENGINE_DETACHED=1): an engine left to itself.
   detached?: boolean;
+  // The engine's stderr -- the JVM's and its libraries' words, never the
+  // student's program's (RarsProbe.ErrRouter) -- appended here.  It is a
+  // log, not the Console: "Picked up JAVA_TOOL_OPTIONS" on a lab PC with a
+  // company Java, a java.util.logging line, must not open the Console.
+  logFile?: string;
 }
 
 const STDERR_KEPT = 8192;
@@ -83,10 +89,14 @@ export function engineTransport(cmd: EngineCommand, env: NodeJS.ProcessEnv = pro
   let alive = true;
 
   child.stderr.setEncoding('utf8');
+  const log = cmd.logFile ? createWriteStream(cmd.logFile, { flags: 'a' }) : null;
+  log?.on('error', () => { /* a log that cannot be written is no reason to stop the engine */ });
   child.stderr.on('data', (chunk: string) => {
-    stderr = (stderr + chunk).slice(-STDERR_KEPT);
+    stderr = (stderr + chunk).slice(-STDERR_KEPT); // the last words, for a crash report
+    log?.write(chunk);
     process.stderr.write(chunk);
   });
+  child.on('close', () => log?.end());
   let buffer = '';
   child.stdout.setEncoding('utf8');
   child.stdout.on('data', (chunk: string) => {

@@ -46,9 +46,37 @@ test('1: closing the window ends both engines', async () => {
   expect(ms, `engines ${pids.join(' ')} still running 5 s after the window closed`).not.toBeNull();
 });
 
-// The app's main process killed while the simulator runs an endless loop;
-// returns ms until both engines were gone, or null.
-async function killedApp(env: Record<string, string>): Promise<{ ms: number | null; pids: number[] }> {
+type Way = 'parent' | 'stdin' | 'none';
+// Which way each engine left by, from its trace: "parent <pid> exited: leaving",
+// "end of stdin: leaving", or neither (killed from outside: the job object; or
+// still running).  Written before the engine goes, so it is there when it went.
+function waysOut(trace: string): Record<'main' | 'checker', Way> {
+  const way = (role: string): Way => {
+    const mine = trace.split('\n').filter((l) => l.includes(` ${role}: `));
+    if (mine.some((l) => /parent \d+ exited: leaving/.test(l))) return 'parent';
+    if (mine.some((l) => l.includes('end of stdin: leaving'))) return 'stdin';
+    return 'none';
+  };
+  return { main: way('main'), checker: way('checker') };
+}
+
+// Where a process came from: its parent, executable and command line.
+function whoIs(pid: number): string {
+  if (process.platform === 'win32') {
+    return execFileSync('powershell.exe', ['-NoProfile', '-Command',
+      `Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | ForEach-Object { "$($_.ProcessId) parent $($_.ParentProcessId) exe $($_.ExecutablePath)\n    command line: $($_.CommandLine)" }`], { encoding: 'utf8' }).trim() || `${pid}: (gone)`;
+  }
+  try {
+    const ppid = /^PPid:\s+(\d+)/m.exec(readFileSync(`/proc/${pid}/status`, 'utf8'))?.[1];
+    return `${pid} parent ${ppid}\n    command line: ${readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').slice(0, 300)}`;
+  } catch { return `${pid}: (gone)`; }
+}
+
+// The app's main process -- the one main.ts runs in, the engines' parent --
+// killed outright while the simulator runs an endless loop.  Returns ms until
+// both engines were gone (or null), how many of its java processes are left
+// after 5 s, and which way each engine left by.
+async function killedApp(env: Record<string, string>): Promise<{ ms: number | null; pids: number[]; left: number; ways: Record<'main' | 'checker', Way> }> {
   const dir = mkdtempSync(path.join(tmpdir(), 'engine-trace-'));
   const trace = path.join(dir, 'trace.txt');
   const r = await launch(undefined, { env: { ...env, ENGINE_JAVA_ARGS: `${env.ENGINE_JAVA_ARGS ?? ''} -Dprobe.trace=${trace}`.trim() } });
@@ -57,42 +85,56 @@ async function killedApp(env: Record<string, string>): Promise<{ ms: number | nu
   await r.page.keyboard.press('F5');
   await expect(r.page.locator('.status')).toContainText('실행 중');
   const main = await r.app.evaluate(() => ({ pid: process.pid, ppid: process.ppid }));
-  say(`  started ${r.app.process().pid}; main.ts runs in ${main.pid} (its parent ${main.ppid}), engines ${pids.join(' ')}: killing ${main.pid} alone`);
+  const started = r.app.process().pid!;
+  // The tree, before anything is killed: the process Playwright started, the one main.ts runs in, an engine.
+  say(`  the tree (${process.env.SPIM_E2E_EXE ? 'the installed app' : 'the source tree'}):`);
+  say(`    started by Playwright: ${whoIs(started)}`);
+  if (main.pid !== started) say(`    main.ts runs in: ${whoIs(main.pid)}`);
+  say(`    an engine: ${whoIs(pids[0])}`.slice(0, 400));
+  say(`  killing ${main.pid} (main.ts) alone; engines ${pids.join(' ')}`);
   killHard(main.pid);
   const ms = await goneWithin(pids, 5000, say);
-  // What the engines saw (their trace) and, on Windows, who their parents are: the evidence when one stays.
-  say(`engine trace:\n${existsSync(trace) ? readFileSync(trace, 'utf8') : '(none written)'}`);
-  if (process.platform === 'win32' && ms === null) {
-    say(execFileSync('powershell.exe', ['-NoProfile', '-Command',
-      `Get-CimInstance Win32_Process -Filter "ProcessId=${pids.join(' or ProcessId=')}" | ForEach-Object { "$($_.ProcessId) parent $($_.ParentProcessId) $($_.Name)" }`], { encoding: 'utf8' }));
-  }
+  const left = javaPids(r.dir).length;
+  const text = existsSync(trace) ? readFileSync(trace, 'utf8') : '';
+  say(`engine trace:\n${text || '(none written)'}`);
+  const ways = waysOut(text);
+  say(`  java processes of this app left after 5 s: ${left}; ways out: main ${ways.main}, checker ${ways.checker}`);
   for (const p of pids) { try { killHard(p); } catch { /* gone */ } }
-  try { killHard(r.app.process().pid!); } catch { /* gone with its child, or the same process */ }
+  try { killHard(started); } catch { /* gone with its child, or the same process */ }
   // Chromium's own processes outlive a killed main process for a moment and still write there.
   try { rmSync(r.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); } catch (e) { say(`  (scratch directory left: ${(e as Error).message})`); }
-  return { ms, pids };
+  return { ms, pids, left, ways };
 }
 
 const NO_WATCH = '-Dprobe.noParentWatch=true', NO_EOF = '-Dprobe.ignoreEof=true';
-const WAYS: { name: string; env: Record<string, string>; only?: 'win32' }[] = [
-  { name: 'all three ways', env: {} },
-  { name: 'the parent watch alone', env: { ENGINE_JAVA_ARGS: NO_EOF, ENGINE_DETACHED: '1' } },
-  { name: 'the parent watch alone, a shutdown hook that never ends', env: { ENGINE_JAVA_ARGS: `${NO_EOF} -Dprobe.stuckShutdownHook=true`, ENGINE_DETACHED: '1' } },
-  { name: 'the end of stdin alone', env: { ENGINE_JAVA_ARGS: NO_WATCH, ENGINE_DETACHED: '1' } },
-  { name: 'the job object alone', env: { ENGINE_JAVA_ARGS: `${NO_WATCH} ${NO_EOF}` }, only: 'win32' },
+// `by`: the ways an engine may have left by.  A way switched off must never be
+// the one (the switch works); with a single way on, it must be that one ('none'
+// for the job object: killed from outside, nothing written).
+const WAYS: { name: string; env: Record<string, string>; by: Way[]; only?: 'win32' }[] = [
+  { name: 'all three ways', env: {}, by: ['parent', 'stdin', 'none'] },
+  { name: 'the parent watch alone', env: { ENGINE_JAVA_ARGS: NO_EOF, ENGINE_DETACHED: '1' }, by: ['parent'] },
+  { name: 'the parent watch alone, a shutdown hook that never ends', env: { ENGINE_JAVA_ARGS: `${NO_EOF} -Dprobe.stuckShutdownHook=true`, ENGINE_DETACHED: '1' }, by: ['parent'] },
+  { name: 'the end of stdin alone', env: { ENGINE_JAVA_ARGS: NO_WATCH, ENGINE_DETACHED: '1' }, by: ['stdin'] },
+  { name: 'the job object alone', env: { ENGINE_JAVA_ARGS: `${NO_WATCH} ${NO_EOF}` }, by: ['none'], only: 'win32' },
+  // The engine as it was before the parent watch: the end of stdin and the job object.
+  { name: 'no parent watch (before 651cf16)', env: { ENGINE_JAVA_ARGS: NO_WATCH }, by: ['stdin', 'none'] },
 ];
 for (const w of WAYS) {
   test(`2: the app's main process killed outright -> its engines leave by themselves: ${w.name}`, async () => {
     test.skip(w.only !== undefined && process.platform !== w.only, 'Windows only');
-    const { ms, pids } = await killedApp(w.env);
+    const { ms, pids, left, ways } = await killedApp(w.env);
     expect(ms, `engines ${pids.join(' ')} left running: orphans`).not.toBeNull();
-    say(`engines gone ${ms} ms after the main process was killed (${w.name})`);
+    expect(left).toBe(0);
+    for (const role of ['main', 'checker'] as const) expect(w.by, `the ${role} engine left by "${ways[role]}"`).toContain(ways[role]);
+    say(`engines gone ${ms} ms after the main process was killed (${w.name}); left by: main ${ways.main}, checker ${ways.checker}`);
   });
 }
 
 test('2, negative control: none of the three ways -> the engines are left behind', async () => {
-  const { ms } = await killedApp({ ENGINE_JAVA_ARGS: `${NO_WATCH} ${NO_EOF}`, ENGINE_DETACHED: '1' });
+  const { ms, left, ways } = await killedApp({ ENGINE_JAVA_ARGS: `${NO_WATCH} ${NO_EOF}`, ENGINE_DETACHED: '1' });
   expect(ms).toBeNull();
+  expect(left).toBe(2);
+  expect(ways).toEqual({ main: 'none', checker: 'none' });
 });
 
 // Windows: the windows that appear on the desktop while the app starts, its

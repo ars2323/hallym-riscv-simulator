@@ -246,8 +246,31 @@ if ($finish) {
     $a1 = & $grab; Start-Sleep -Seconds 2; $a2 = & $grab
     $diff = 0; for ($y = 0; $y -lt 120; $y += 4) { for ($x = 0; $x -lt 400; $x += 4) { $c1 = $a1.GetPixel($x, $y); $c2 = $a2.GetPixel($x, $y); $diff += [Math]::Abs($c1.R - $c2.R) + [Math]::Abs($c1.G - $c2.G) + [Math]::Abs($c1.B - $c2.B) } }
     Note ("the start screen's background over 2 s: mean change {0:N1} per pixel ({1})" -f ($diff / 3000), $(if ($diff / 3000 -gt 2) { 'moving: the video' } else { 'still: no video' }))
-    Get-Process HallymRISCV -ErrorAction SilentlyContinue | ForEach-Object { $null = $_.CloseMainWindow() }
-    Start-Sleep -Seconds 5
+    # The tree as a student's launch makes it (not Playwright's), and the app
+    # killed outright there: taskkill /F on the engines' parent alone, no /T.
+    $procs = @(Get-CimInstance Win32_Process -Filter "Name='HallymRISCV.exe' or Name='java.exe'")
+    foreach ($q in $procs) { $cl = "$($q.CommandLine)"; Note ("tree: {0} parent {1} {2} {3}" -f $q.ProcessId, $q.ParentProcessId, $q.ExecutablePath, $cl.Substring(0, [Math]::Min(160, $cl.Length))) }
+    $engines = @($procs | Where-Object { $_.Name -eq 'java.exe' -and "$($_.CommandLine)".Contains('RarsProbe') })
+    $parents = @($engines | ForEach-Object { $_.ParentProcessId } | Sort-Object -Unique)
+    Check ($engines.Count -eq 2) "two engines running: $($engines.Count) ($(($engines | ForEach-Object { $_.ProcessId }) -join ' '))"
+    Check ($parents.Count -eq 1) "both engines children of one process: $($parents -join ' ')"
+    if ($engines.Count -gt 0 -and $parents.Count -eq 1) {
+      $main = $parents[0]
+      $mp = $procs | Where-Object { $_.ProcessId -eq $main }
+      Note "killing $main ($($mp.Name), parent $($mp.ParentProcessId)) alone: taskkill /F, no /T"
+      & taskkill.exe /F /PID $main
+      $t0 = Get-Date; $left = $engines.Count
+      while ($left -gt 0) {
+        $ms = [int]((Get-Date) - $t0).TotalMilliseconds
+        if ($ms -gt 5000) { break }
+        Start-Sleep -Milliseconds 250
+        $left = @($engines | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }).Count
+        Note "  $ms ms: $left engine(s) running"
+      }
+      $ms = [int]((Get-Date) - $t0).TotalMilliseconds
+      Check ($left -eq 0) "the app killed outright: its engines gone by themselves ($left left, $ms ms)"
+      $engines | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    }
     Get-Process HallymRISCV -ErrorAction SilentlyContinue | Stop-Process -Force
   }
 }
