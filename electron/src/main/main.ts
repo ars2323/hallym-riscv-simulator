@@ -217,10 +217,15 @@ async function main(): Promise<void> {
       writeFileSync(target, encoded.bytes);
       return { path: target, name: path.basename(target) };
     }));
-  ipcMain.handle('about:info', () => ({
-    version, rars: sim.rars, electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node,
-    licenses: LICENSES.map((l) => l.title),
-  }));
+  // The engine's RARS version is known once it is ready (a cold start on Windows takes a quarter
+  // of a second): About waits for it, at most 5 s, rather than say "?".
+  ipcMain.handle('about:info', async () => {
+    await Promise.race([sim.whenReady().catch(() => {}), new Promise((r) => setTimeout(r, 5000))]);
+    return {
+      version, rars: sim.rars, electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node,
+      licenses: LICENSES.map((l) => l.title),
+    };
+  });
   ipcMain.handle('about:license', (_e, i: number) => answer(() => {
     if (i === LICENSES.length) return readFileSync(paths.electronLicense(), 'utf8');
     return readFileSync(paths.license(LICENSES[i].name), 'utf8');

@@ -60,6 +60,8 @@ const STDERR_KEPT = 8192;
 export function engineArgs(cmd: EngineCommand): string[] {
   return ['-Xlog:disable', '-Xlog:all=warning:stderr', '-Djava.awt.headless=true',
     '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8',
+    // This process: the engine leaves when it is gone (RarsProbe, "hallym.parent").
+    `-Dhallym.parent=${process.pid}`,
     ...(cmd.prefsDir ? [`-Djava.util.prefs.userRoot=${cmd.prefsDir}`] : []),
     ...(cmd.extraArgs ?? []), '-cp', cmd.classpath, 'RarsProbe'];
 }

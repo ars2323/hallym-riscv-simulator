@@ -44,6 +44,11 @@ on:
   pull_request:
     paths: ['electron/**', 'probe/**', 'docs/**', 'README.md', 'NOTICE', '.claude/hooks/**', '.github/workflows/electron.yml']
   workflow_dispatch:
+    inputs:
+      commit-pictures:
+        description: 'Commit the installer and Windows pictures this run takes to main (the release round: CLAUDE.md, rule 4)'
+        type: boolean
+        default: false
 
 defaults:
   run:
@@ -281,6 +286,55 @@ jobs:
             electron/test-results-1920/
             electron/test-results-ime/
           if-no-files-found: ignore
+
+  # The pictures only a Windows run can take -- the installer's pages and the
+  # window with Windows' own caption buttons -- committed to main by this
+  # run, when asked (a dispatch with commit-pictures): the release round's
+  # step 4.2 (CLAUDE.md).  By CI, not by hand, because the session that
+  # drives a round cannot download artifacts (its network policy denies the
+  # artifacts' host).  The commit is made only if main is still the commit
+  # this run built; its own checks run when the round dispatches this
+  # workflow on it (a push by GITHUB_TOKEN starts no workflow).
+  pictures:
+    name: Commit the installer and Windows pictures (by hand only)
+    needs: windows
+    if: github.event_name == 'workflow_dispatch' && inputs.commit-pictures && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-report
+          path: windows-report
+      - name: Into electron/docs/screens/, one commit, pushed to main
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "::error::main moved on from $GITHUB_SHA: nothing committed"; exit 1; }
+          find windows-report -type f \( -name '*.png' -o -name '*.txt' \) | sort | head -80
+          out=electron/docs/screens
+          for f in installer-progress installer-finish installer-started uninstaller-finish; do
+            src=$(find windows-report -path '*installer*' -name "$f.png" | head -1)
+            [ -n "$src" ] || { echo "::error::no $f.png in the report"; exit 1; }
+            cp "$src" "$out/$f.png"
+          done
+          for f in windows-frame windows-frame-tutorial; do
+            src=$(find windows-report -path '*screens*' -name "$f.png" | head -1)
+            [ -n "$src" ] || { echo "::error::no $f.png in the report"; exit 1; }
+            cp "$src" "$out/$f.png"
+          done
+          git add "$out"
+          if git diff --cached --quiet; then echo "the pictures are those already committed"; exit 0; fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "docs/screens: the installer's and Windows' pictures, from run $GITHUB_RUN_ID (commit ${GITHUB_SHA::7})"
+          git push origin HEAD:main
+          echo "committed $(git rev-parse HEAD)"
 
   # This build over the one students may already have: the latest published
   # release, downloaded from its release page.  Before the first release

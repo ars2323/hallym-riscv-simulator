@@ -56,3 +56,14 @@ same names where the scene is the same.)
 | `tutorial-21.png` | Step 21: the end | step 21 |
 | `font-24-narrow.png` | The biggest font (24 px) in the narrowest window, a long file name | CSS 910×505 at 1.5×, Ctrl+= ×11 |
 | `titlebar-24-narrow.png` | Its title bar, cropped | the same, the top 40 px |
+
+From the Windows CI job (the installed program on the runner's 1920×1080 screen), committed by its `pictures` job:
+
+| File | What | Capture conditions |
+|---|---|---|
+| `windows-frame.png` | The whole Windows screen, the window maximised: Windows' own caption buttons on the title bar | the installed app, the `split-running` run (`tools/capture-screens.ts`) |
+| `windows-frame-tutorial.png` | The same with the tutorial on: the caption buttons' patch dimmed with the window | tutorial step 14 |
+| `installer-progress.png` | The installer's first page: the progress, the bar in the app's blue | `tools/windows/check-installer-ui.ps1` |
+| `installer-finish.png` | Its second and last page: "설치가 완료되었습니다", "지금 실행하기" ticked, 마침; the navy band with the symbol | the same |
+| `installer-started.png` | The program 마침 started: its first screen | the same |
+| `uninstaller-finish.png` | The uninstaller's finish page: "제거가 끝났습니다" | the same |

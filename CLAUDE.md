@@ -82,6 +82,12 @@ RISC-V 판에 없는 것: Qt 판과 그 워크플로, 1.2.4 와의 나란히 설
 - 뮤턴트 기준선(`electron/tools/mutants-baseline.json`)은 `mutants.yml` 전체 패스가 초록일 때 그 산출물로
   사람이(또는 세션이) 커밋한다.
 - 앱은 `electron/src` 와 엔진(`probe/src`)이다: 둘 중 하나를 바꾼 라운드는 배포로 끝난다.
+- 규칙 4.2 의 설치 관리자 사진은 사람이 아니라 CI 가 커밋한다: `electron.yml` 을 main 에서
+  `commit-pictures` 로 수동 실행하면 그 런의 `pictures` 잡이 Windows 사진(설치 관리자 넷, Windows 실물 둘)을
+  `electron/docs/screens/` 에 커밋해 main 에 올린다. 세션은 CI 산출물을 내려받지 못한다(산출물이 놓이는
+  `productionresultssa16.blob.core.windows.net` 을 세션의 네트워크 정책이 막는다). GITHUB_TOKEN 의 푸시는
+  워크플로를 시작하지 않으므로, 그 커밋의 검사는 `electron.yml` 을 main 에서 한 번 더 수동 실행해 돌린다.
+  뮤턴트 기준선은 `mutants.yml` 의 로그에 찍히는 JSON 을 옮겨 커밋한다.
 
 ### Releasing the Electron edition (MIPS 판 원문)
 

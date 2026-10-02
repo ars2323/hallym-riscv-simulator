@@ -250,7 +250,9 @@ test('10: the engine dies -> the student is told, a fresh engine starts, the pro
   await expect.poll(() => enginePids('main').filter((p) => p !== pids[0]).length, { timeout: 15_000 }).toBe(1);
   await page.locator('.cm-content').click();
   await page.keyboard.press('Control+s');
-  await page.waitForSelector('.asm[data-state=ok]');
+  // The machine back on the Run side (the crash took it away): the assemble is done.  (Waiting for the
+  // Assemble panel's "ok" was not enough on Windows: it still said ok from before the crash.)
+  await page.waitForSelector('.run-grid:not([hidden])');
   await page.keyboard.press('F10');
   await settled(page);
   expect(await regHex(page, 'x10')).toBe('0x00000007');

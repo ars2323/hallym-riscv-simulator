@@ -151,6 +151,19 @@ public class RarsProbe {
             if (arg instanceof SimulatorNotice && ((SimulatorNotice) arg).getAction() == SimulatorNotice.SIMULATOR_STOP)
                 finish((SimulatorNotice) arg);
         });
+        // The process that started us (-Dhallym.parent=<pid>): when it is gone, so are we.  The end of
+        // stdin says the same, but not always: on Windows an Electron main process killed outright
+        // left both engines running (tests/e2e/engine-process.e2e.ts, the installed app), its pipes
+        // apparently still held elsewhere.  -Dprobe.ignoreEof=true (the orphan checks' negative
+        // control) ignores both.
+        String parent = System.getProperty("hallym.parent");
+        if (parent != null && !Boolean.getBoolean("probe.ignoreEof")) {
+            try {
+                java.util.Optional<ProcessHandle> ph = ProcessHandle.of(Long.parseLong(parent));
+                if (ph.isEmpty()) System.exit(0);
+                ph.get().onExit().thenRun(() -> System.exit(0));
+            } catch (NumberFormatException e) { /* no such pid: nothing to watch */ }
+        }
         send("{\"ev\":\"ready\",\"protocol\":" + PROTOCOL + ",\"rars\":" + Json.str(Globals.version) + "}");
 
         BufferedReader in = new BufferedReader(new InputStreamReader(new FileInputStream(FileDescriptor.in), StandardCharsets.UTF_8));
