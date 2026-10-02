@@ -722,13 +722,22 @@ async function load(opened: { name: string; path: string | null; text: string; f
   requestAnimationFrame(() => editor.view.focus());
 }
 
+// A call on its way to the engine (an assemble, a step) finishes first: one
+// that came back after another file was opened would put the old file's
+// machine on screen (the engine answers in a few ms, but not at once).
+async function idle(): Promise<void> {
+  for (let i = 0; i < 500 && busy; i += 1) await new Promise((r) => setTimeout(r, 20));
+}
+
 async function newFile(): Promise<void> {
+  await idle();
   if (!(await mayReplace('new'))) return;
   await load({ name: UNTITLED, path: null, text: '', format: { encoding: 'UTF-8', byteOrderMark: false, lineEnd: 'LF' } });
   file.format = null;
   renderChrome();
 }
 async function openFile(): Promise<void> {
+  await idle();
   if (!(await mayReplace('open'))) return;
   await load(await api.openFile().catch((e: Error) => { [saveNote, saveWarn] = [e.message, true]; renderChrome(); return null; }));
 }

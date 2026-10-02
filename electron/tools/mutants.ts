@@ -356,6 +356,8 @@ const MUTANTS: Mutant[] = [
     find: "    const hint = source ? hintFor(e.message, source) : '';", replace: "    const hint = '';", tests: ["tests/e2e/editor.e2e.ts"] },
   { module: "near-miss", file: "src/renderer/app/app.ts", what: "the word RARS names not passed to the guess",
     find: "  const flagged = /^\"([^\"]+)\"/.exec(message)?.[1] ?? null;", replace: "  const flagged = null;", tests: ["tests/e2e/editor.e2e.ts"] },
+  { module: "window", file: "src/renderer/app/app.ts", what: "a file opened while an assemble is on its way (the late answer wins)",
+    find: "  for (let i = 0; i < 500 && busy; i += 1) await new Promise((r) => setTimeout(r, 20));", replace: "", tests: ["tests/e2e/flows.e2e.ts"] },
   { module: "tutorial", file: "src/renderer/app/tutorial.ts", what: "step 5 points at the wrong line (sub for add)",
     find: "const ADD = /^\\s+add\\s+t3, t1, t2/;", replace: "const ADD = /^\\s+sub\\s+t4/;", tests: ["tests/e2e/tutorial.e2e.ts"] },
   { module: "tutorial", file: "src/renderer/app/tutorial.ts", what: "step 9 rings the MIPS fields",

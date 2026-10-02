@@ -3,7 +3,7 @@
 import { expect, test } from '@playwright/test';
 import path from 'node:path';
 
-import { answerSave, launch, openAndAssemble, program, regHex, sample, settled, statusText, textRow, type Running } from './harness.ts';
+import { answerOpen, answerSave, launch, openAndAssemble, program, regHex, resize, sample, settled, side, statusText, textRow, type Running } from './harness.ts';
 
 let r: Running;
 test.beforeEach(async () => { r = await launch(); });
@@ -158,3 +158,28 @@ test('console input: the run waits, Enter goes on', async () => {
 // (The MIPS edition's ".err directive ends the core" test is not here: RARS has
 // no such directive, and nothing in a source ends the engine.  A dead engine is
 // firstlight.e2e.ts 10.)
+
+// The engine answers an assemble in a few milliseconds, not at once: a file
+// opened (Ctrl+O) while the last one's assemble is on its way must come up in
+// the Editor, nothing of the old file's machine with it.  (Seen in the narrow
+// window: the late answer took the student to the Run side, the old program on it.)
+test('another file opened while an assemble is on its way: that file, in the Editor, no machine', async () => {
+  const { app, page } = r;
+  await resize(r, { width: 910, height: 505 });
+  await page.getByRole('button', { name: /바로 시작/ }).click();
+  await page.getByRole('button', { name: /새 파일/ }).first().click();
+  await page.locator('.cm-content').click();
+  await page.keyboard.insertText('main:\n  li a0, 1\n  li a7, 10\n  ecall\n');
+  await answerSave(app, path.join(r.dir, 'first.s'));
+  const other = program(r.dir, 'second.s', '# the second file\nmain:\n  li a7, 10\n  ecall\n');
+  await answerOpen(app, other);
+  await page.keyboard.press('Control+s');
+  await page.keyboard.press('Control+o');   // at once: the assemble has not answered yet
+  await expect(page.locator('.titlebar .file')).toContainText('second.s');
+  await expect(page.locator('.editor-panel .cm-content')).toBeVisible();
+  await expect(page.locator('.cm-line').first()).toHaveText('# the second file');
+  await page.waitForTimeout(500);           // the first file's answer is in by now
+  await expect(page.locator('.editor-panel .cm-content')).toBeVisible();
+  await side(page, 'Run');
+  await expect(page.locator('.run-placeholder')).toHaveAttribute('data-kind', 'fresh');
+});

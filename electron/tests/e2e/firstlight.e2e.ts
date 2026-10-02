@@ -16,11 +16,11 @@
      ENGINE_JAVA_ARGS=-Dprobe.v1StopInput=true    -> 8 fails (a0 holds the fake input 0)
      SIM_RESTART=0                                -> 10 fails (no engine comes back) */
 
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import path from 'node:path';
 
 import { javaPids } from '../helpers/processes.ts';
-import { answerSave, launch, newFile, openAndAssemble, openOnly, program, regHex, settled, statusText, type Running } from './harness.ts';
+import { answerSave, launch, newFile, openAndAssemble, openOnly, program, regHex, settled, side, statusText, type Running } from './harness.ts';
 
 let r: Running;
 test.beforeEach(async () => { r = await launch(); });
@@ -28,7 +28,13 @@ test.afterEach(async () => { await r.close(); });
 
 
 // A click in the breakpoint gutter, level with the Editor's line `line`.
+// The edited code assembled: the Assemble panel says ok and the band over the Run side is gone
+// (as states, not as what is on screen: a narrow window may be showing either side).
+const assembledAgain = (page: Page) => page.waitForFunction(() =>
+  (document.querySelector('.asm') as HTMLElement | null)?.dataset.state === 'ok' && document.querySelector('.run-band')?.hasAttribute('hidden'));
+
 async function gutter(line: number): Promise<void> {
+  await side(r.page, 'Editor');
   const at = (await r.page.locator('.cm-line').nth(line - 1).boundingBox())!;
   const g = (await r.page.locator('.cm-bp-gutter').boundingBox())!;
   await r.page.mouse.click(g.x + g.width / 2, at.y + at.height / 2);
@@ -54,6 +60,7 @@ test('1-6: opens on the Editor, writes a program, assembles, steps; registers, T
   await expect(page.locator('.titlebar .file')).toContainText('untitled.s');
   // 2 (new): type a program; Ctrl+S asks where to save it, then assembles
   await answerSave(r.app, path.join(r.dir, 'arith.s'));
+  await side(page, 'Editor'); // a narrow window shows one side at a time
   await page.locator('.cm-content').click();
   await page.keyboard.insertText(ARITH);
   await page.keyboard.press('Control+s');
@@ -106,6 +113,7 @@ test('3: errors in the Assemble panel, by line, in RARS\'s words; the machine on
   await settled(page);
   expect(await regHex(page, 'x10')).toBe('0x00000001');
   // Two errors: a missing operand on line 3, an unknown instruction on line 5.
+  await side(page, 'Editor'); // a narrow window shows one side at a time
   await page.locator('.cm-content').click();
   await page.keyboard.press('Control+a');
   await page.keyboard.insertText('main:\n  li a0, 1\n  addi a1, a0\n  li a7, 10\n  bogus a0\n  ecall\n');
@@ -133,11 +141,12 @@ test('7: Run, and Stop (Esc) ends an endless loop', async () => {
   await expect(page.locator('.status')).toContainText('멈췄습니다');
   expect(Number.parseInt(await regHex(page, 'x5'), 16)).toBeGreaterThan(1000); // t0 counted while it ran
   // and Run to the end of a program that ends
+  await side(page, 'Editor'); // a narrow window shows one side at a time
   await page.locator('.cm-content').click();
   await page.keyboard.press('Control+a');
   await page.keyboard.insertText('main:\n  li a0, 3\n  li a7, 93\n  ecall\n');
   await page.keyboard.press('Control+s');
-  await page.waitForSelector('.asm[data-state=ok]');
+  await assembledAgain(page);
   await page.keyboard.press('F5');
   await settled(page);
   await expect(page.locator('.status')).toContainText('프로그램이 끝났습니다');
@@ -214,12 +223,13 @@ test('9: assembling again is clean, and a breakpoint survives it (the engine set
   expect(await regHex(page, 'x6')).toBe('0x00000002');   // t1 done
   expect(await regHex(page, 'x7')).toBe('0x00000000');   // t2 not yet
   // Line 3 becomes code: line 5's instruction moves to a new address.  The app sends no breakpoint.
+  await side(page, 'Editor');
   await page.locator('.cm-line').nth(2).click();
   await page.keyboard.press('End');
   await page.keyboard.press('Shift+Home');
   await page.keyboard.insertText('    li   t3, 9');
   await page.keyboard.press('Control+s');
-  await page.waitForSelector('.asm[data-state=ok]');
+  await assembledAgain(page);
   // Clean: the machine starts again from nothing.
   expect(await regHex(page, 'x5')).toBe('0x00000000');
   expect(await regHex(page, 'x6')).toBe('0x00000000');
@@ -248,6 +258,7 @@ test('10: the engine dies -> the student is told, a fresh engine starts, the pro
   await expect(page.locator('.run-placeholder')).toContainText('엔진을 다시 시작했습니다');
   // A fresh engine (another process), ready: Ctrl+S works again.
   await expect.poll(() => enginePids('main').filter((p) => p !== pids[0]).length, { timeout: 15_000 }).toBe(1);
+  await side(page, 'Editor'); // a narrow window shows one side at a time
   await page.locator('.cm-content').click();
   await page.keyboard.press('Control+s');
   // The machine back on the Run side (the crash took it away): the assemble is done.  (Waiting for the

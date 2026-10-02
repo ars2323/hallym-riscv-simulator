@@ -125,3 +125,29 @@ test('a title bar too narrow for the long name: Assemble, the tooltip whole; wid
     await r.close();
   }
 });
+
+test("the tutorial's example: Assemble, since it is never saved -- the tooltip, the status bar and the Run side agree", async () => {
+  const r = await launch({ width: 1280, height: 800 });
+  const { page } = r;
+  try {
+    await page.getByRole('button', { name: /튜토리얼 보기/ }).click();
+    await page.waitForSelector('.tut-card');
+    expect(await shownName(page)).toBe('Assemble');
+    await expect(button(page)).toHaveAttribute('title', 'Assemble (Ctrl+S): 예제라서 저장하지 않습니다');
+    await expect(placeholderButton(page)).toHaveText(/^Assemble/);
+    const before = await statusText(page);
+    expect(before).toContain('어셈블 (Ctrl+S)');
+    expect(before).not.toContain('저장');
+    // Step 2: the card names the button as it is on the student's own files.
+    await page.locator('.tut-card .tut-next').click();
+    await expect(page.locator('.tut-card')).toContainText('Save & Assemble 버튼');
+    await button(page).click();
+    await page.waitForSelector('.run-grid:not([hidden])');
+    await settled(page);
+    expect(await statusText(page)).toContain('예제라서 저장하지 않습니다');
+    expect(await shownName(page)).toBe('Assemble');
+    await noEntities(page);
+  } finally {
+    await r.close();
+  }
+});
