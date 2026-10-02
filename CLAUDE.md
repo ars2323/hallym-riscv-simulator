@@ -71,14 +71,17 @@ RARS 는 프로그램이 끝나면(`SystemIO.resetFiles`) `System.out` 을 `clos
 ## Electron 판 배포 규칙 (한림 MIPS 판 CLAUDE.md 에서 가져옴)
 
 아래 일곱 규칙은 MIPS 판(`ars2323/hallym-mips-simulator` v2.7.1)의 것을 그대로 옮겼다. 두 번 구부러지며
-다듬어진 것이라 그대로 지킨다. 다만 RISC-V 판에는 아직 설치본·Windows CI·태그 런·업그레이드 잡이 없다
-(그 워크플로들은 `electron/docs/ci-from-mips/` 에 참고로만 있다). 그래서 지금은:
+다듬어진 것이라 그대로 지킨다. 이름은 RISC-V 판에 맞게 읽는다(HallymMIPS → HallymRISCV, 2.x → 이 판의 버전).
+RISC-V 판에 없는 것: Qt 판과 그 워크플로, 1.2.4 와의 나란히 설치, `CPU/`, 애드온(`electron/native`).
+그 밖에는 지금 그대로 적용된다 —
 
-- 규칙 1 의 "앱을 바꾼 라운드는 배포로 끝난다" 는 설치본이 생긴 라운드부터 적용한다. 그 전 라운드의
-  보고는 "배포 없음" 과 이유(설치본이 아직 없음)를 쓴다.
-- 규칙 3 의 검사표 가운데 지금 있는 것: `.github/workflows/electron.yml`(타입 검사, 단위 검사, 모든 e2e),
-  `.github/workflows/ci.yml`(엔진·탐침). Qt 판·1.2.4·설치본에 관한 항목은 RISC-V 판에 없다.
-- 이름은 MIPS 판의 것(HallymMIPS, 1.2.4, Qt 워크플로)을 RISC-V 판에 맞게 읽는다.
+- 검사표(규칙 3)는 `.github/workflows/electron.yml` 의 잡들이다: `linux`(타입, 단위, 문서 링크, 엔진 측정,
+  RARS 대조, 모든 e2e), `widths`(네 폭과 1920), `windows`(설치본, `/S`, 설치된 앱의 e2e 와 1920, 한국어 IME,
+  화면, 설치 관리자 페이지), `upgrade`(최신 릴리스 위에; 첫 릴리스 전에는 홀로, 그리고 자기 위에).
+  엔진·탐침은 `.github/workflows/ci.yml`, 뮤턴트 전체는 `.github/workflows/mutants.yml`.
+- 뮤턴트 기준선(`electron/tools/mutants-baseline.json`)은 `mutants.yml` 전체 패스가 초록일 때 그 산출물로
+  사람이(또는 세션이) 커밋한다.
+- 앱은 `electron/src` 와 엔진(`probe/src`)이다: 둘 중 하나를 바꾼 라운드는 배포로 끝난다.
 
 ### Releasing the Electron edition (MIPS 판 원문)
 

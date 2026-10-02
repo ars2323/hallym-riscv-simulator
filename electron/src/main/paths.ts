@@ -53,7 +53,7 @@ export const version: string = bundled
    LICENSE and NOTICE next to the executable as well (BSD: the notice goes
    with the binary). */
 export const LICENSES: { name: string; title: string }[] = [
-  { name: 'NOTICE', title: 'NOTICE — RARS, JSoftFloat' },
+  { name: 'NOTICE', title: 'NOTICE — RARS, JSoftFloat, the Java runtime (Temurin), Hallym University marks' },
   { name: 'OFL-Pretendard.txt', title: 'Pretendard — SIL Open Font License 1.1' },
   { name: 'OFL-D2Coding.txt', title: 'D2Coding — SIL Open Font License 1.1' },
   { name: 'lucide-LICENSE.txt', title: 'Lucide icons — ISC License' },

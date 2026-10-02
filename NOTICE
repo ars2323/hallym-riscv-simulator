@@ -1,10 +1,32 @@
-Hallym RISC-V Simulator
-=======================
+Hallym RISC-V Simulator — notices
+=================================
 
-This repository does not (yet) contain or redistribute RARS. The probe in
-probe/ downloads RARS at build time and links against it unmodified. The
-notices below are carried from the first commit because any later build that
-ships RARS must include them.
+What the program (the installer HallymRISCV-<version>-win-x64-setup.exe and
+what it installs) contains, and under which terms.  Each component keeps its
+own license.  The university's marks, characters and video (section 7) are
+under no license from this project at all.
+
+This is a personal project, made for teaching computer architecture at
+Hallym University (AIAC Lab).  It is not an official product of Hallym
+University.
+
+Contents
+  1. RARS and JSoftFloat               the simulator engine (MIT)
+  2. Eclipse Temurin (OpenJDK) 21      the Java runtime the engine runs on
+  3. Electron, Chromium and Node.js    the program's window
+  4. Pretendard, D2Coding              fonts (SIL Open Font License 1.1)
+  5. Lucide                            icons (ISC / MIT)
+  6. Other components                  npm packages bundled into the program
+  7. Hallym University marks, the characters Haram and Hari, and the video
+
+
+1. RARS and JSoftFloat
+----------------------
+
+RARS 1.6, built unmodified from its tag v1.6 (commit 7acf3254), with
+JSoftFloat inside it; installed as resources/engine/rars.jar.  The engine
+around it (resources/engine/classes, this project's own) talks to it through
+its Java API.  Their notices, as they come with them:
 
 -------------------------------------------------------------------------------
 RARS -- RISC-V Assembler and Runtime Simulator
@@ -63,3 +85,83 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+2. Eclipse Temurin (OpenJDK) 21
+-------------------------------
+
+The Java runtime in resources/engine/runtime/: Eclipse Temurin 21.0.12+1
+(https://adoptium.net), reduced by jlink to the modules the engine needs
+(java.base, java.prefs, java.desktop and what they require).  OpenJDK is
+under the GNU General Public License version 2 with the Classpath Exception
+(GPL-2.0 WITH Classpath-exception-2.0), (c) Oracle and/or its affiliates and
+other contributors.  The license texts and the notices of the libraries it
+includes are installed with it, in resources/engine/runtime/legal/ (one
+folder per module).  Its source is at https://github.com/adoptium/jdk21u.
+
+
+3. Electron, Chromium and Node.js
+---------------------------------
+
+Electron (MIT License, (c) Electron contributors, (c) GitHub Inc.), which
+contains Chromium (BSD-style licenses, (c) The Chromium Authors, with the
+many libraries Chromium includes) and Node.js (MIT License, (c) Node.js
+contributors, with the libraries Node.js includes).
+
+Their license texts are installed next to HallymRISCV.exe:
+  LICENSE.electron.txt     Electron's license
+  LICENSES.chromium.html   Chromium's credits: the licenses of Chromium,
+                           Node.js and the libraries they include
+The program's About > Licenses opens the latter.
+
+
+4. Pretendard, D2Coding
+-----------------------
+
+Pretendard, (c) 2021 Kil Hyung-jin (https://github.com/orioncactus/pretendard),
+and D2Coding, (c) NAVER Corporation (https://github.com/naver/d2codingfont),
+both under the SIL Open Font License 1.1: electron/src/renderer/assets/fonts/
+(subset and converted to WOFF2; the licenses OFL-Pretendard.txt and
+OFL-D2Coding.txt there, and in About > Licenses).  The installer's side band
+(electron/packaging/*.bmp) has the program's name drawn in Pretendard.
+
+
+5. Lucide
+---------
+
+Lucide icons, (c) Lucide Contributors (https://lucide.dev), under the ISC
+License; the parts derived from Feather, (c) Cole Bemis, under the MIT License:
+electron/src/renderer/assets/icons/lucide/ (license: LICENSE.txt there).
+
+
+6. Other components
+-------------------
+
+The npm packages bundled into the program's JavaScript (CodeMirror and its
+dependencies, iconv-lite, safer-buffer), all under the MIT License.  Their
+list and license texts are generated at build time (electron/tools/licenses.ts)
+and shown in About > Licenses.
+
+
+7. Hallym University marks, and the characters Haram and Hari
+-------------------------------------------------------------
+
+The Hallym University symbol (the title bar's logo, the application icon, the
+installer's side band), the university's characters Haram (하람) and Hari
+(하리), and the opening aerial shot of its promotional video (0:00.1 to
+0:02.6), slowed down and without sound (the first screen), belong to Hallym
+University.  The video is "[Official Video] 한림대학교 홍보영상｜The New Hallym
+대학의 내일을 열다", from Hallym University's official YouTube channel,
+@HALLYMNEWS.  They are the Hallym MIPS Simulator's (v2.7.1), as they are.
+
+They appear in this software only to identify it as a teaching tool for
+Hallym University's courses.
+
+They are not covered by any license in this file, and they may not be taken
+from this repository or from the program and used separately.  Anyone who
+forks or redistributes this project must remove them, unless Hallym University
+has given its own permission.
+
+Where they are:
+  electron/src/renderer/assets/hallym/   marks, characters and the video (README.md there)
+  electron/packaging/icons/              the application icon, made from the symbol
+  electron/packaging/*.bmp               the installer's side band, with the symbol

@@ -83,6 +83,8 @@ jobs:
         run: |
           node tools/gen-rars-words.ts
           git diff --exit-code tests/core/rars-words.json
+      - name: The editor's keyword table is what RARS's source says
+        run: node tools/gen-op-table.ts --check
       - name: Every e2e test (a real window, xvfb)
         env:
           ELECTRON_DISABLE_SANDBOX: '1'   # Ubuntu 24.04 runners forbid the unprivileged user namespaces Chromium's sandbox needs

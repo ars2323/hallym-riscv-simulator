@@ -10,15 +10,14 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test --import ./tests/helpers/timer-at-exit.ts \"tests/**/*.test.ts\"",
     "test:mutants": "node tools/mutants.ts",
-    "build:electron": "node tools/build-electron.ts",
     "electron": "node tools/build-ui.ts && node tools/electron.ts",
     "e2e": "node tools/build-ui.ts && playwright test",
     "e2e:widths": "node tools/build-ui.ts && node tools/e2e-widths.ts",
     "screens": "node tools/build-ui.ts && node tools/capture-screens.ts",
-    "measure:ui": "node tools/build-ui.ts && node tools/measure-ui.ts",
     "package": "node tools/package.ts",
     "package:dir": "node tools/package.ts --dir",
-    "gen:rars-words": "node tools/gen-rars-words.ts"
+    "gen:rars-words": "node tools/gen-rars-words.ts",
+    "gen:op-table": "node tools/gen-op-table.ts"
   },
   "dependencies": {
     "iconv-lite": "^0.7.3"
