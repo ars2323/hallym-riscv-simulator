@@ -99,6 +99,28 @@ function Run([string]$name, [string]$hide) {
 $shipped = Run 'shipped' ''
 if ($shipped.Count -eq 0) { Pass 'as shipped: no console window shows when the app starts or restarts its engines' } else { Bad "as shipped: $($shipped.Count) console window(s) showed" }
 $control = Run 'control' '0'
-if ($control.Count -gt 0) { Pass "  control, ENGINE_WINDOWS_HIDE=0: $($control.Count) console window(s) showed" } else { Bad '  control, ENGINE_WINDOWS_HIDE=0: no console window showed, so the check above means nothing' }
+if ($control.Count -gt 0) { Pass "  control, ENGINE_WINDOWS_HIDE=0: $($control.Count) console window(s) showed" }
+else {
+  # Measured on windows-latest (5c13ba2): each engine has its own conhost.exe and no window
+  # shows, windowsHide or not -- this runner shows no window for a console child whose stdio
+  # is pipes, so it cannot show the flash windowsHide prevents, and the check above proves
+  # nothing here.  Said loudly, not counted as a pass or a failure: windowsHide is pinned by
+  # tests/sim/process.test.ts and its mutant.  For the record, java.exe started on its own
+  # (Start-Process: its own console, stdio the console's) -- does a java console show here?
+  Write-Host "BLOCKED  control, ENGINE_WINDOWS_HIDE=0: no console window showed on this runner, so the check above proves nothing here"
+  Write-Host '::warning title=Console window check unproven::With windowsHide off no console window showed on this runner either; the check cannot be proven here (WINDOWS.md)'
+  $java = Join-Path (Split-Path $Exe) 'resources\engine\runtime\bin\java.exe'
+  $out = Join-Path $Report 'console-flash-java-alone.json'; $started = "$out.started"
+  $watcher = Start-Process powershell.exe -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+    (Join-Path $PSScriptRoot 'console-windows.ps1'), '-Seconds', '8', '-Out', $out, '-Started', $started)
+  Until 'the window watcher' 30 { Test-Path $started }
+  $engine = Join-Path (Split-Path $Exe) 'resources\engine'
+  # The engine itself: it waits on its stdin (here its console's) until killed.
+  $j = Start-Process $java -ArgumentList @('-cp', ('"' + (Join-Path $engine 'classes') + ';' + (Join-Path $engine 'rars.jar') + '"'), 'RarsProbe') -PassThru
+  Start-Sleep -Seconds 3
+  if (-not $j.HasExited) { Stop-Process -Id $j.Id -Force }
+  if (-not $watcher.WaitForExit(20000)) { throw 'the window watcher did not end within 20 s' }
+  foreach ($w in @((Get-Content $out -Raw | ConvertFrom-Json).appeared)) { Write-Host "      java.exe alone, appeared: $($w.class) '$($w.title)' ($($w.process) $($w.pid)) at $($w.ms) ms" }
+}
 if ($failed) { Write-Host "$failed FAILED"; exit 1 }
-Write-Host 'the check passed, its control failed'
+if ($control.Count -gt 0) { Write-Host 'the check passed, its control failed' } else { Write-Host 'the check passed; its control could not fail on this runner: BLOCKED, not proven' }

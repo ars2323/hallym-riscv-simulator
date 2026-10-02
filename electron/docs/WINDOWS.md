@@ -31,15 +31,16 @@ SHA-256 mean anything.
 
 Measured on the Windows runner, each with a negative control that fails:
 
-- **No console window.** `java.exe` is a console program; started from a window it gets a console of its own (a
-  `conhost.exe`), which shows as a black window at every start and restart unless hidden. It is started with
-  `windowsHide` (`src/sim/transport.ts`, `spawnOptions`). A watcher lists every visible window every 20 ms
-  (`tools/windows/console-windows.ps1`); its own control: a console program started with `Start-Process` is
-  seen. Checked where a student's start is -- the installed app started with `Start-Process`, as Explorer and
-  the Start menu start it (`tools/windows/console-flash.ps1`, the Windows CI job) -- with its control:
-  `ENGINE_WINDOWS_HIDE=0` must show one. Under Playwright neither shows a window (CI, 87a9531: every engine had
-  its `conhost.exe`, no window with `windowsHide` or without): the app is shown and hidden as Playwright starts
-  it, so the control cannot fail there.
+- **No console window -- in place, not proven.** `java.exe` is a console program; started from a window it gets a
+  console of its own (a `conhost.exe`), which on a PC that shows it is a black window at every start and restart.
+  It is started with `windowsHide` (`src/sim/transport.ts`, `spawnOptions`; `tests/sim/process.test.ts` and its
+  mutant pin it). A watcher lists every visible window every 20 ms (`tools/windows/console-windows.ps1`; its own
+  control, a console program started with `Start-Process`, is seen), and no console window shows. **But the
+  control fails to fail:** on the CI runner (windows-latest) every engine has its own `conhost.exe` and no
+  window shows with `windowsHide` or without -- under Playwright (87a9531) and with the app started as Explorer
+  starts it (`tools/windows/console-flash.ps1`, 5c13ba2). The runner shows no window for a console child whose
+  stdio is pipes, so it cannot show the flash `windowsHide` prevents, and the check proves nothing there.
+  `console-flash.ps1` says so in every run (BLOCKED) instead of passing.
 - **Killing.** Windows has no signals: `kill('SIGKILL')` is `TerminateProcess`; the exit is reported in about
   10 ms and the process is gone. Control: a polite end (closing stdin) against an engine that ignores it leaves
   it running.
