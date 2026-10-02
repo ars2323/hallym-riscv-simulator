@@ -17,9 +17,9 @@
      SIM_RESTART=0                                -> 10 fails (no engine comes back) */
 
 import { expect, test } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
+import { javaPids } from '../helpers/processes.ts';
 import { answerSave, launch, openAndAssemble, openOnly, program, regHex, root, settled, statusText, type Running } from './harness.ts';
 
 let r: Running;
@@ -233,11 +233,8 @@ test('9: assembling again is clean, and a breakpoint survives it (the engine set
   expect(await regHex(page, 'x7')).toBe('0x00000000');   // stopped before line 5, not before line 4
 });
 
-// The pids of this app's engine processes of one role.
-function enginePids(role: 'main' | 'checker'): number[] {
-  const out = execFileSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' });
-  return out.split('\n').filter((l) => l.includes(`-Dhallym.engine=${role}`) && l.includes(r.dir)).map((l) => Number(l.trim().split(/\s+/)[0]));
-}
+// The pids of this app's engine processes of one role (Windows too: tests/helpers/processes.ts).
+const enginePids = (role: 'main' | 'checker'): number[] => javaPids(`-Dhallym.engine=${role}`, r.dir);
 
 test('10: the engine dies -> the student is told, a fresh engine starts, the program assembles again', async () => {
   const { page } = r;

@@ -29,6 +29,6 @@ fi
 
 if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
   echo "export RARS_HOME=\"$RARS_HOME\"" >> "$CLAUDE_ENV_FILE"
-  echo "export RARS_JAR=\"$RARS_HOME/rars1_6.jar\"" >> "$CLAUDE_ENV_FILE"
+  echo "export RARS_JAR=\"$RARS_HOME/rars-src.jar\"" >> "$CLAUDE_ENV_FILE"
 fi
 echo "session-start: done in $(( ($(date +%s%N) - t0) / 1000000 )) ms"

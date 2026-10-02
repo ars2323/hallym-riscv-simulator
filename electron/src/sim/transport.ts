@@ -27,6 +27,7 @@ export interface Transport {
   onMessage(listener: (message: EngineMessage) => void): void;
   onExit(listener: (info: ExitInfo) => void): void;
   kill(): void; // forcibly; the host uses it only as a last resort
+  pid?: number;  // the engine's process, for the checks that it is gone
 }
 
 export type TransportFactory = () => Transport;
@@ -36,20 +37,31 @@ export interface EngineCommand {
   classpath: string;
   prefsDir?: string;   // where RARS's java.util.prefs settings go (never the user's home)
   extraArgs?: string[];
+  // Windows: java.exe is a console program, and started from a window (no
+  // console of its own) it gets a new console window -- a black box flashing
+  // up at every start and restart.  Hidden unless false (ENGINE_WINDOWS_HIDE=0,
+  // the negative control of tests/e2e/windows.e2e.ts).
+  windowsHide?: boolean;
 }
 
 const STDERR_KEPT = 8192;
 
 // JVM unified logging writes to stdout by default, which is the protocol
 // channel (docs/engine-protocol.md 1): warnings go to stderr instead.
+// Text is UTF-8 on every stream, whatever the PC's code page: RARS reads and
+// writes the console through the default charset (SystemIO), which JDK 21
+// makes UTF-8 but a Korean Windows' MS949 would replace (file.encoding=COMPAT,
+// the negative control of tools/engine-windows.ts); stderr follows the code
+// page unless told.
 export function engineArgs(cmd: EngineCommand): string[] {
   return ['-Xlog:disable', '-Xlog:all=warning:stderr', '-Djava.awt.headless=true',
+    '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8',
     ...(cmd.prefsDir ? [`-Djava.util.prefs.userRoot=${cmd.prefsDir}`] : []),
     ...(cmd.extraArgs ?? []), '-cp', cmd.classpath, 'RarsProbe'];
 }
 
 export function engineTransport(cmd: EngineCommand, env: NodeJS.ProcessEnv = process.env): Transport {
-  const child = spawn(cmd.java, engineArgs(cmd), { stdio: ['pipe', 'pipe', 'pipe'], env, windowsHide: true });
+  const child = spawn(cmd.java, engineArgs(cmd), { stdio: ['pipe', 'pipe', 'pipe'], env, windowsHide: cmd.windowsHide ?? true });
   const listeners: ((m: EngineMessage) => void)[] = [];
   const exitListeners: ((info: ExitInfo) => void)[] = [];
   let stderr = '';
@@ -91,6 +103,8 @@ export function engineTransport(cmd: EngineCommand, env: NodeJS.ProcessEnv = pro
     send: (line) => { if (alive && child.stdin.writable) child.stdin.write(JSON.stringify(line) + '\n'); },
     onMessage: (l) => { listeners.push(l); },
     onExit: (l) => { exitListeners.push(l); },
+    // SIGKILL: on Windows, which has no signals, libuv's TerminateProcess.
     kill: () => { child.kill('SIGKILL'); },
+    pid: child.pid,
   };
 }

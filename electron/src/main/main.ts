@@ -116,6 +116,7 @@ async function main(): Promise<void> {
   const extraArgs = (process.env.ENGINE_JAVA_ARGS ?? '').split(/\s+/).filter(Boolean);
   const transport = (role: 'main' | 'checker') => () => engineTransport({
     ...where, prefsDir: path.join(runDir, 'rars-prefs'), extraArgs: [`-Dhallym.engine=${role}`, ...extraArgs],
+    windowsHide: process.env.ENGINE_WINDOWS_HIDE !== '0',
   });
   // SIM_RESTART=0: a crashed engine is not restarted (a negative control for the restart test).
   const sim = new Simulator({ transport: transport('main'), restartOnCrash: process.env.SIM_RESTART !== '0' });

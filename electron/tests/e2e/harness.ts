@@ -28,9 +28,9 @@ export const defaultSize = (() => {
   return m ? { width: Number(m[1]), height: Number(m[2]) } : { width: 1280, height: 800 };
 })();
 export async function launch(size: { width: number; height: number } = defaultSize,
-                             options: { userData?: string; switches?: string[]; keepSize?: boolean } = {}): Promise<Running> {
+                             options: { userData?: string; switches?: string[]; keepSize?: boolean; env?: Record<string, string> } = {}): Promise<Running> {
   const dir = mkdtempSync(path.join(tmpdir(), 'spim-e2e-'));
-  const env = { ...process.env, SPIM_USER_DATA: options.userData ?? path.join(dir, 'user-data') } as Record<string, string>;
+  const env = { ...process.env, SPIM_USER_DATA: options.userData ?? path.join(dir, 'user-data'), ...options.env } as Record<string, string>;
   delete env.ELECTRON_RUN_AS_NODE; // set by VS Code; Electron would run as plain Node
   const exe = process.env.SPIM_E2E_EXE;
   // switches: Chromium's, e.g. --force-device-scale-factor=1.25 (a 125% display).

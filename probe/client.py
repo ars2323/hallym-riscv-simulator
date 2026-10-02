@@ -13,7 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 def classpath():
     jar = os.environ.get("RARS_JAR")
     if not jar:
-        sys.exit("RARS_JAR is empty: point it at rars1_6.jar (see probe/setup.sh)")
+        sys.exit("RARS_JAR is empty: point it at rars-src.jar (see probe/setup.sh)")
     if not os.path.isfile(jar):
         sys.exit(f"RARS_JAR={jar} does not exist")
     build = os.path.join(HERE, "build", "classes")

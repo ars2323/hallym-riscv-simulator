@@ -1,6 +1,6 @@
 # Guards the engine decision: the SessionStart hook still prepares RARS from scratch,
 # the wrapper honours docs/engine-protocol.md against unmodified RARS (released jar and
-# a jar built from the pinned commit), and the java.desktop finding still holds.
+# the jar built from the pinned commit, which the app ships), and the java.desktop finding still holds.
 name: ci
 on:
   push:
@@ -22,10 +22,10 @@ jobs:
           RARS_HOME="$RUNNER_TEMP/rars" CLAUDE_PROJECT_DIR="$PWD" .claude/hooks/session-start.sh
       - name: SessionStart hook again (must be a no-op)
         run: CLAUDE_PROJECT_DIR="$PWD" .claude/hooks/session-start.sh
-      - name: bench + checks (released jar)
+      - name: bench + checks (the jar built from the pinned RARS commit, the one the app ships)
         run: probe/run.sh all
-      - name: checks (jar built from the pinned RARS commit)
-        run: RARS_JAR="$RARS_HOME/rars-src.jar" python3 probe/checks.py probe/build/jlink/min
+      - name: checks (the released jar, for comparison)
+        run: RARS_JAR="$RARS_HOME/rars1_6.jar" python3 probe/checks.py probe/build/jlink/min
       - uses: actions/upload-artifact@v4
         if: always()
         with:

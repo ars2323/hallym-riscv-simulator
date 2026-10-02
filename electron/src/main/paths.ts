@@ -31,7 +31,7 @@ export const paths = {
 const repo = path.join(root, '..');
 export function engine(): { java: string; classpath: string } {
   const rarsHome = process.env.RARS_HOME ?? path.join(process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), '.cache'), 'hallym-riscv', 'rars');
-  const jar = process.env.RARS_JAR ?? path.join(rarsHome, 'rars1_6.jar');
+  const jar = process.env.RARS_JAR ?? path.join(rarsHome, 'rars-src.jar');
   const classes = process.env.ENGINE_CLASSES ?? path.join(repo, 'probe', 'build', 'classes');
   return { java: process.env.ENGINE_JAVA ?? 'java', classpath: [classes, jar].join(path.delimiter) };
 }

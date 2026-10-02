@@ -169,8 +169,12 @@ public class RarsProbe {
             } catch (Exception e) {
                 send("{\"id\":" + id + "," + err("internal", e.toString()) + "}");
             }
-            if ("quit".equals(req.get("cmd"))) break;
+            if ("quit".equals(req.get("cmd"))) { System.exit(0); }
         }
+        // stdin ended: whoever started us is gone (on Windows a dead parent leaves no signal, only
+        // this end of file), so we go too -- an engine left behind would pile up on a shared lab PC.
+        // -Dprobe.ignoreEof=true (negative control for the orphan check) stays instead.
+        if (Boolean.getBoolean("probe.ignoreEof")) Thread.sleep(Long.MAX_VALUE);
         System.exit(0);
     }
 
