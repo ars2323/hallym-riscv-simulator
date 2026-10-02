@@ -3,9 +3,8 @@
 
      node tools/check-doc-links.ts            the working tree (git's tracked files)
      node tools/check-doc-links.ts --online <ref>
-                                              the published documents: the README, the user guide,
-                                              docs/compare and docs/edutech, as GitHub serves them at
-                                              <ref>, and every web link in them
+                                              the published documents: the README and the user guide,
+                                              as GitHub serves them at <ref>, and every web link in them
 
    Offline:
    - broken: a Markdown link or picture ([..](x), ![..](x), <img src="x">) in
@@ -14,8 +13,8 @@
    - orphan: a picture (.png .jpg .jpeg .gif .svg .webp) tracked under docs/
      or electron/docs/ that no tracked text file names (by its path or, in
      the same folder, its name: the screens README lists its files by name).
-   SPIM's own files (CPU/, Documentation/, Tests/, spim/, xspim/, PCSpim/,
-   README, ChangeLog) are upstream's and left out.
+   (The MIPS edition's tool; this repository has no upstream files in it --
+   RARS is fetched, never committed.)
 
    Prints what it found and exits 1 if anything is broken or orphaned. */
 
@@ -24,8 +23,8 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 const repo = path.join(import.meta.dirname, '..', '..');
-const REPO = 'ars2323/hallym-mips-simulator';
-const UPSTREAM = /^(CPU|Documentation|Tests|spim|xspim|PCSpim)\/|^(README|ChangeLog)$/;
+const REPO = 'ars2323/hallym-riscv-simulator';
+const UPSTREAM = /^$/;
 const PICTURE = /\.(png|jpe?g|gif|svg|webp)$/i;
 const TEXT = /\.(md|ts|js|ps1|sh|py|yml|yaml|html|css|txt|pro|qrc|nsh|json)$/i;
 
@@ -106,7 +105,7 @@ async function offline(): Promise<number> {
 }
 
 async function online(ref: string): Promise<number> {
-  const docs = tracked.filter((f) => f === 'README.md' || /^docs\/(usage|compare|edutech)\/[^/]+\.md$/.test(f));
+  const docs = tracked.filter((f) => f === 'README.md' || /^docs\/usage\/[^/]+\.md$/.test(f));
   const bad: string[] = [];
   const seen = new Map<string, number>();
   const get = async (url: string) => {

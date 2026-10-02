@@ -12,8 +12,8 @@
       sampled at the caption buttons' patch (first-frames.txt: whether a
       white patch shows on the first screen's dark bar before the page
       turns it transparent)
-    - installed where /S installs: %LOCALAPPDATA%\Programs\Hallym MIPS, the
-      Start menu's Hallym MIPS, the uninstall entry "Hallym MIPS <version>"
+    - installed where /S installs: %LOCALAPPDATA%\Programs\Hallym RISC-V, the
+      Start menu's Hallym RISC-V, the uninstall entry "Hallym RISC-V <version>"
   then uninstalls it with the uninstaller's pages (the progress, then "제거가
   끝났습니다"), as Settings > Apps does.  Pictures, in <Report>:
     installer-progress.png  the progress page
@@ -104,7 +104,7 @@ function PixelAt([int]$x, [int]$y) {
 # page, its controls.  The uninstaller runs as a copy of itself from %TEMP%,
 # so it is found by its title, not by the process started.
 function Page($p, [string]$finishTitle = '설치가 완료되었습니다') {
-  $tops = if ($p -is [System.Diagnostics.Process]) { [Ui]::Tops([uint32]$p.Id) } else { [Ui]::AllTops() | Where-Object { [Ui]::Text($_) -like 'Hallym MIPS*' } }
+  $tops = if ($p -is [System.Diagnostics.Process]) { [Ui]::Tops([uint32]$p.Id) } else { [Ui]::AllTops() | Where-Object { [Ui]::Text($_) -like 'Hallym RISC-V*' } }
   $top = $tops | Where-Object { [Ui]::Class($_) -eq '#32770' } | Select-Object -First 1
   if (-not $top) { return $null }
   $controls = @([Ui]::Children($top) | ForEach-Object { [pscustomobject]@{ H = $_; Class = [Ui]::Class($_); Text = [Ui]::Text($_) } })
@@ -121,10 +121,10 @@ function Page($p, [string]$finishTitle = '설치가 완료되었습니다') {
 $uninstallRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
 function Ours() {
   Get-ChildItem $uninstallRoot -ErrorAction SilentlyContinue | ForEach-Object { Get-ItemProperty $_.PSPath } |
-    Where-Object { $_.DisplayName -like 'Hallym MIPS 2*' }
+    Where-Object { $_.DisplayName -like 'Hallym RISC-V *' }
 }
 Check ($null -eq (Ours)) 'nothing of ours installed before'
-Get-Process HallymMIPS -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process HallymRISCV -ErrorAction SilentlyContinue | Stop-Process -Force
 
 Write-Host '== the installer, with its pages'
 $p = Start-Process (Resolve-Path $Setup).Path -PassThru
@@ -198,11 +198,11 @@ if ($finish) {
     $gr.CopyFromScreen($right - 160, $top + 6, 0, 0, $bm.Size); $gr.Dispose()
     $pb = @((& $mean $bm 26), (& $mean $bm 14)); $bm.Dispose(); ,$pb }
   $null = & $grab 400 0
-  $null = Get-Process HallymMIPS -ErrorAction SilentlyContinue
+  $null = Get-Process HallymRISCV -ErrorAction SilentlyContinue
   $sw = [Diagnostics.Stopwatch]::StartNew(); $win = [IntPtr]::Zero
   if ($done) { [void][Post]::PostMessage($done.H, $BM_CLICK, [IntPtr]0, [IntPtr]0) }
   while ($sw.ElapsedMilliseconds -lt 30000 -and $win -eq [IntPtr]::Zero) {
-    $pr = Get-Process HallymMIPS -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    $pr = Get-Process HallymRISCV -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
     if ($pr -and [Ui]::IsWindowVisible($pr.MainWindowHandle)) { $win = $pr.MainWindowHandle } else { Start-Sleep -Milliseconds 10 }
   }
   Check ($win -ne [IntPtr]::Zero) "the program's window appeared ($($sw.ElapsedMilliseconds) ms after 마침)"
@@ -229,7 +229,7 @@ if ($finish) {
   }
   Check ($p.WaitForExit(30000)) 'the installer closed'
   $app = $null
-  for ($i = 0; $i -lt 60 -and -not $app; $i++) { Start-Sleep -Milliseconds 500; $app = Get-Process HallymMIPS -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1 }
+  for ($i = 0; $i -lt 60 -and -not $app; $i++) { Start-Sleep -Milliseconds 500; $app = Get-Process HallymRISCV -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1 }
   Check ($null -ne $app) 'the program started'
   if ($app) {
     Start-Sleep -Seconds 6 # the first screen's video playing
@@ -246,9 +246,9 @@ if ($finish) {
     $a1 = & $grab; Start-Sleep -Seconds 2; $a2 = & $grab
     $diff = 0; for ($y = 0; $y -lt 120; $y += 4) { for ($x = 0; $x -lt 400; $x += 4) { $c1 = $a1.GetPixel($x, $y); $c2 = $a2.GetPixel($x, $y); $diff += [Math]::Abs($c1.R - $c2.R) + [Math]::Abs($c1.G - $c2.G) + [Math]::Abs($c1.B - $c2.B) } }
     Note ("the start screen's background over 2 s: mean change {0:N1} per pixel ({1})" -f ($diff / 3000), $(if ($diff / 3000 -gt 2) { 'moving: the video' } else { 'still: no video' }))
-    Get-Process HallymMIPS -ErrorAction SilentlyContinue | ForEach-Object { $null = $_.CloseMainWindow() }
+    Get-Process HallymRISCV -ErrorAction SilentlyContinue | ForEach-Object { $null = $_.CloseMainWindow() }
     Start-Sleep -Seconds 5
-    Get-Process HallymMIPS -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process HallymRISCV -ErrorAction SilentlyContinue | Stop-Process -Force
   }
 }
 if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
@@ -258,14 +258,14 @@ $entry = Ours
 Check ($null -ne $entry) 'uninstall entry under HKCU (per user)'
 if ($entry) {
   Note "uninstall entry: $($entry.DisplayName) $($entry.DisplayVersion); $($entry.UninstallString)"
-  Check ($entry.DisplayName -match '^Hallym MIPS 2\.\d+\.\d+$') "uninstall entry named ""$($entry.DisplayName)"""
+  Check ($entry.DisplayName -match '^Hallym RISC-V \d+\.\d+\.\d+$') "uninstall entry named ""$($entry.DisplayName)"""
   # The uninstall key has no InstallLocation: the folder is the uninstaller's (as check-side-by-side.ps1 reads it).
   $dir = $entry.InstallLocation
   if (-not $dir) { $dir = Split-Path -Parent ($entry.UninstallString -replace '"', '' -replace ' /currentuser', '') }
-  Check ($dir -eq "$env:LOCALAPPDATA\Programs\Hallym MIPS") "installed in $dir"
-  Check (Test-Path (Join-Path $dir 'HallymMIPS.exe')) 'HallymMIPS.exe there'
-  Check (Test-Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Hallym MIPS.lnk')) 'Start menu: Hallym MIPS'
-  Check (-not (Test-Path (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Hallym MIPS.lnk'))) 'no desktop shortcut'
+  Check ($dir -eq "$env:LOCALAPPDATA\Programs\Hallym RISC-V") "installed in $dir"
+  Check (Test-Path (Join-Path $dir 'HallymRISCV.exe')) 'HallymRISCV.exe there'
+  Check (Test-Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Hallym RISC-V.lnk')) 'Start menu: Hallym RISC-V'
+  Check (-not (Test-Path (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Hallym RISC-V.lnk'))) 'no desktop shortcut'
 
   Write-Host '== uninstall, with its pages (as Settings > Apps runs it)'
   $un = $entry.UninstallString
@@ -296,7 +296,7 @@ if ($entry) {
   }
   Start-Sleep -Seconds 5
   Check ($null -eq (Ours)) 'uninstalled: the entry gone'
-  Check (-not (Test-Path (Join-Path $dir 'HallymMIPS.exe'))) 'uninstalled: the program gone'
+  Check (-not (Test-Path (Join-Path $dir 'HallymRISCV.exe'))) 'uninstalled: the program gone'
   if (Ours) {
     # Leave the runner clean whatever happened above.
     $q = Start-Process $exe -ArgumentList "$uargs /S" -Wait -PassThru

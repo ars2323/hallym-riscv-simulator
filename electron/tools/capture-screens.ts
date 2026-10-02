@@ -57,12 +57,30 @@ const guide = process.env.SCREENS_OUT ? path.join(out, 'usage') : path.join(root
 mkdirSync(guide, { recursive: true });
 
 const LAB04 = 'tests/samples/lab04-ok.s';     // shown as lab04.s
-const LAB04_STEPS = 16;                         // PC 0x0040004c, $t6 just changed
-const PINNED = '0x00400054';                    // sra $s1, $t6, 1
+const LAB04_STEPS = 12;                         // PC 0x00400030, s1 (x9) just changed by srli
+const PINNED = '0x00400030';                    // srai s2, t6, 1
 const ERROR = 'tests/samples/lab04.s';          // line 15: srll
 const DATA = 'tests/samples/data-labels.s';
 const DATA_STEPS = 14;                          // past the sw onto the stack
-const TYPO = '        .text\n        .global main            # .globl\nmain:   li      $v0, 10\n        syscall\n';
+const TYPO = '        .text\nmain:   li      a7, 10\n        syscall                 # MIPS: ecall in RISC-V\n';
+const FORMATS = `.data
+v:  .word 0
+.text
+main:
+    nop
+    add  t1, t0, t0
+    addi t2, t1, -5
+    lui  t0, 0x10010
+    sw   t2, -8(t0)
+    bne  t2, zero, next
+    nop
+next:
+    jal  ra, fun
+    li   a7, 10
+    ecall
+fun:
+    ret
+`;
 const MAX_BYTES = 400 * 1024;
 const MAX_SCREEN_BYTES = 700 * 1024; // a whole Windows screen, up to 1920x1080
 const MAX_CROP_BYTES = 150 * 1024;
@@ -251,7 +269,7 @@ async function lab04(r: Running): Promise<void> {
   await page.waitForSelector('.run-band:not([hidden])');
   await shot(r, 'edited');
   await page.keyboard.press('Control+End');
-  await page.keyboard.insertText('        srll $t7, $t6, 1\n');
+  await page.keyboard.insertText('        srll t5, t6, 1\n');
   await page.keyboard.press('Control+s');
   await page.waitForSelector('.asm[data-state=errors]');
   await page.keyboard.press('Control+Home');
@@ -270,6 +288,20 @@ async function lab04(r: Running): Promise<void> {
   await page.locator('.ptab', { hasText: 'Data' }).click();
   await page.waitForSelector('.drow');
   await shot(r, 'data');
+  await r.close();
+}
+
+// The Inspector in each of the six formats (tests/e2e/inspector-formats.e2e.ts's program):
+// R, I, U, S, B, J, the word in its fields and the scattered immediate put together.
+{
+  const r = await launch({ width: 1280, height: 800 });
+  await assembled(r, program(r.dir, 'formats.s', FORMATS));
+  await steps(r, 1);
+  for (const f of ['R', 'I', 'U', 'S', 'B', 'J']) {
+    await r.page.waitForFunction((k) => document.querySelector('.insp .badge')?.textContent === k, f);
+    await shot(r, `inspector-${f}`);
+    await steps(r, 1);
+  }
   await r.close();
 }
 
@@ -325,7 +357,7 @@ for (const [name, size, scale] of [
 }
 
 // The tutorial (docs/PORTING.md 18, 25, 30): steps 1, 2 and 5 (the card right
-// under the toolbar button it is about), 3 (Registers lit whole), 4 (lui + ori), 9 (bits = Encoding), 14 (the gutter), 19 (the Assemble
+// under the toolbar button it is about), 3 (Registers: both names), 4 (lui + addi), 9 (bits = Encoding), 14 (the gutter), 19 (the Assemble
 // panel, after Assemble), 20 (its "N행으로 가기": the line to fix), 21;
 // step 9 again in the narrow window.  Each step is entered as the tutorial
 // enters it (its go()), which sets the machine up the same way every time.

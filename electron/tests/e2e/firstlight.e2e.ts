@@ -20,13 +20,12 @@ import { expect, test } from '@playwright/test';
 import path from 'node:path';
 
 import { javaPids } from '../helpers/processes.ts';
-import { answerSave, launch, newFile, openAndAssemble, openOnly, program, regHex, root, settled, statusText, type Running } from './harness.ts';
+import { answerSave, launch, newFile, openAndAssemble, openOnly, program, regHex, settled, statusText, type Running } from './harness.ts';
 
 let r: Running;
 test.beforeEach(async () => { r = await launch(); });
 test.afterEach(async () => { await r.close(); });
 
-const SCREENS = path.join(root, 'docs', 'screens');
 
 // A click in the breakpoint gutter, level with the Editor's line `line`.
 async function gutter(line: number): Promise<void> {
@@ -84,7 +83,7 @@ test('1-6: opens on the Editor, writes a program, assembles, steps; registers, T
   await expect(insp.locator('.fname')).toHaveText(['funct7', 'rs2', 'rs1', 'funct3', 'rd', 'opcode']);
   await expect(insp.locator('.fbox.f-funct7 .fbits')).toHaveText('0100000');
   await expect(insp.locator('.explain')).toContainText('x12');
-  await page.screenshot({ path: path.join(SCREENS, 'riscv-overview.png') });
+  await page.screenshot({ path: test.info().outputPath('riscv-overview.png') }); // the kept set: tools/capture-screens.ts
   // ...and an I word (lw): imm[11:0] rs1 funct3 rd opcode, the immediate sign-extended
   await page.keyboard.press('F10');
   await settled(page);
@@ -120,7 +119,7 @@ test('3: errors in the Assemble panel, by line, in RARS\'s words; the machine on
   await expect(page.locator('.cm-error-gutter .cm-error-mark')).toHaveCount(2);
   // The last program is still on the Run side, where it was.
   expect(await regHex(page, 'x10')).toBe('0x00000001');
-  await page.screenshot({ path: path.join(SCREENS, 'riscv-errors.png') });
+  await page.screenshot({ path: test.info().outputPath('riscv-errors.png') }); // the kept set: tools/capture-screens.ts
 });
 
 test('7: Run, and Stop (Esc) ends an endless loop', async () => {
@@ -170,7 +169,7 @@ test('8: console output, input when the program asks; Stop while it waits leaves
   await expect(page.locator('.clog')).toHaveText('number? ');
   await expect(page.locator('.status')).toContainText('입력을 기다립니다');
   await input.fill('21');
-  await page.screenshot({ path: path.join(SCREENS, 'riscv-console-input.png') });
+  await page.screenshot({ path: test.info().outputPath('riscv-console-input.png') }); // the kept set: tools/capture-screens.ts
   await input.press('Enter');
   await settled(page);
   await expect(page.locator('.clog')).toContainText('42');

@@ -1,10 +1,10 @@
-; The per-user install folder: %LOCALAPPDATA%\Programs\Hallym MIPS.  A one-click
+; The per-user install folder: %LOCALAPPDATA%\Programs\Hallym RISC-V.  A one-click
 ; installer (to 2.3.0) named it after the package's npm name (hallym-mips, which
 ; may not have blanks or capitals); this include is read before the templates
 ; that use APP_FILENAME, so the folder carries the program's name -- as the
 ; assisted installer's own default does too.
 !undef APP_FILENAME
-!define APP_FILENAME "Hallym MIPS"
+!define APP_FILENAME "Hallym RISC-V"
 
 ; The assisted installer's pages (tools/package.ts: oneClick false), from 2.4.0:
 ; the progress, then the finish page.  No page asks "for all users or only for
@@ -23,7 +23,7 @@
     ${StdUtils.ExecShellAsUser} $0 "$launchLink" "open" ""
   FunctionEnd
   !define MUI_FINISHPAGE_TITLE "설치가 완료되었습니다"
-  !define MUI_FINISHPAGE_TEXT "Hallym MIPS 설치를 마쳤습니다.$\r$\n$\r$\n다음부터는 시작 메뉴의 Hallym MIPS 항목으로 엽니다."
+  !define MUI_FINISHPAGE_TEXT "Hallym RISC-V 설치를 마쳤습니다.$\r$\n$\r$\n다음부터는 시작 메뉴의 Hallym RISC-V 항목으로 엽니다."
   !define MUI_FINISHPAGE_RUN
   !define MUI_FINISHPAGE_RUN_TEXT "지금 실행하기"
   !define MUI_FINISHPAGE_RUN_FUNCTION "HallymStartApp"
@@ -31,7 +31,7 @@
 !macroend
 
 ; The progress pages' words, and the uninstaller's.  NSIS's own Korean ones
-; put a particle after the program's name ("Hallym MIPS(을)를 설치하는 동안
+; put a particle after the program's name ("Hallym RISC-V(을)를 설치하는 동안
 ; ..."), which this program never does.  MUI_PAGE_HEADER_* apply to the next
 ; page inserted: each macro below comes just before its page.
 !macro customPageAfterChangeDir
@@ -68,7 +68,7 @@
 !macroend
 !macro customUninstallPage
   !define MUI_FINISHPAGE_TITLE "제거가 끝났습니다"
-  !define MUI_FINISHPAGE_TEXT "Hallym MIPS 제거를 마쳤습니다.$\r$\n$\r$\n직접 저장한 .s 파일은 그대로 있습니다."
+  !define MUI_FINISHPAGE_TEXT "Hallym RISC-V 제거를 마쳤습니다.$\r$\n$\r$\n직접 저장한 .s 파일은 그대로 있습니다."
 !macroend
 
 ; electron-builder's installer keeps a copy of itself (the whole
@@ -76,5 +76,5 @@
 ; differential updates.  This program has no auto-updater: remove the copy.
 !macro customInstall
   Delete "$LOCALAPPDATA\${APP_INSTALLER_STORE_FILE}"
-  RMDir "$LOCALAPPDATA\hallym-mips-updater"
+  RMDir "$LOCALAPPDATA\hallym-riscv-updater"
 !macroend

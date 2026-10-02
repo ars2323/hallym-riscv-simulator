@@ -7,9 +7,13 @@ default drawing:
     elements unchanged: assets/hallym/README.md), on a white plate with
     clear space around it, since its blue would be lost on navy;
   - the program's name in Pretendard, white.  No Korean: the name is
-    "Hallym MIPS".
+    "Hallym RISC-V".
 
-    python3 tools/installer-art.py
+    python3 tools/installer-art.py [Pretendard-Bold.otf]
+
+The font: Pretendard Bold (OFL, the app's own font; src/renderer/assets/fonts
+has only its web subsets) -- the path as the argument, else the env
+PRETENDARD_BOLD.
 
 Writes packaging/installerSidebar.bmp and packaging/uninstallerSidebar.bmp
 (tools/package.ts).  Needs Pillow and cairosvg.
@@ -17,13 +21,14 @@ Writes packaging/installerSidebar.bmp and packaging/uninstallerSidebar.bmp
 
 import io
 import os
+import sys
 
 import cairosvg
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = os.path.join(os.path.dirname(__file__), '..')
 SYMBOL = os.path.join(ROOT, 'src/renderer/assets/hallym/marks/symbol-basic.svg')
-FONT = os.path.join(ROOT, '../QtSpim/edu/theme/fonts/Pretendard-Bold.otf')
+FONT = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get('PRETENDARD_BOLD', ''))
 W, H = 164, 314
 NAVY, NAVY_2 = (0, 32, 91), (6, 48, 120)
 SCALE = 4  # drawn at 4x, then reduced: smooth edges
@@ -47,7 +52,7 @@ def sidebar() -> Image.Image:
     sym = Image.open(io.BytesIO(png)).convert('RGBA')
     img.paste(sym, (plate[0] + 16 * SCALE, (plate[1] + plate[3] - sym.height) // 2), sym)
     font = ImageFont.truetype(FONT, 17 * SCALE)
-    text = 'Hallym MIPS'
+    text = 'Hallym RISC-V'
     tw = draw.textlength(text, font=font)
     draw.text(((w - tw) / 2, 128 * SCALE), text, font=font, fill=(255, 255, 255))
     # A short teal rule under the name (the app's teal, #00A9A5).

@@ -1,11 +1,15 @@
 # Installing this build over an earlier one, as a student who has the
-# earlier one would: one install folder (%LOCALAPPDATA%\Programs\Hallym MIPS,
+# earlier one would: one install folder (%LOCALAPPDATA%\Programs\Hallym RISC-V,
 # the same one), one uninstall entry (now this version), one Start menu
 # shortcut, the new program in place.  Then this build once more over
 # itself (a student who runs the same installer again): still one of each.
 # Then uninstalls, leaving the machine as it was.
 #
 #   check-upgrade.ps1 -Old <setup.exe> -OldVersion <x> -New <setup.exe> -NewVersion <y> -Report <dir>
+#   check-upgrade.ps1 -New <setup.exe> -NewVersion <y> -Report <dir>
+#
+# Without -Old (no earlier release: the first one), this build alone, then
+# this build over itself.
 param([string]$Old, [string]$OldVersion, [string]$New, [string]$NewVersion, [string]$Report)
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force $Report | Out-Null
@@ -18,7 +22,7 @@ $uninstallRoot = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
 # (A fresh machine may have no per-user Uninstall key yet: none installed.)
 $programs = Join-Path $env:LOCALAPPDATA 'Programs'
 $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
-function Entries { Get-ChildItem $uninstallRoot -ErrorAction SilentlyContinue | ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -like 'Hallym MIPS*' } }
+function Entries { Get-ChildItem $uninstallRoot -ErrorAction SilentlyContinue | ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -like 'Hallym RISC-V*' } }
 function Folders { Get-ChildItem $programs -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*allym*' } | ForEach-Object { $_.Name } }
 function Shortcuts { Get-ChildItem $startMenu -Recurse -Filter '*.lnk' -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*allym*' } | ForEach-Object { $_.FullName.Substring($startMenu.Length + 1) } }
 function Install($setup) {
@@ -27,12 +31,12 @@ function Install($setup) {
 }
 function State($when) {
   $e = @(Entries); $f = @(Folders); $s = @(Shortcuts)
-  $exe = Join-Path $programs 'Hallym MIPS\HallymMIPS.exe'
+  $exe = Join-Path $programs 'Hallym RISC-V\HallymRISCV.exe'
   $v = if (Test-Path $exe) { (Get-Item $exe).VersionInfo.ProductVersion } else { '(none)' }
   Note "$when -- uninstall entries: $(($e | ForEach-Object { "$($_.DisplayName) [$($_.DisplayVersion)]" }) -join '; ')"
   Note "$when -- folders in $programs named *allym*: $($f -join '; ')"
   Note "$when -- Start menu shortcuts: $($s -join '; ')"
-  Note "$when -- HallymMIPS.exe product version: $v"
+  Note "$when -- HallymRISCV.exe product version: $v"
   return @{ entries = $e; folders = $f; shortcuts = $s; version = $v }
 }
 
@@ -40,26 +44,35 @@ Note "== before"
 $s0 = State 'before'
 Check ($s0.entries.Count -eq 0 -and $s0.folders.Count -eq 0) 'nothing installed to begin with'
 
+if (-not $Old) {
+  Note "== no earlier release: $NewVersion alone"
+  Install $New
+  $s2 = State 'installed'
+  Check ($s2.entries.Count -eq 1 -and $s2.entries[0].DisplayVersion -eq $NewVersion) "$NewVersion installed: one entry"
+  Check (($s2.folders -join '|') -eq 'Hallym RISC-V') "$NewVersion in Programs\Hallym RISC-V"
+  Check ($s2.shortcuts.Count -eq 1) 'one Start menu shortcut'
+} else {
 Note "== $OldVersion"
 Install $Old
 $s1 = State 'earlier'
 Check ($s1.entries.Count -eq 1 -and $s1.entries[0].DisplayVersion -eq $OldVersion) "$OldVersion installed: one entry"
-Check (($s1.folders -join '|') -eq 'Hallym MIPS') "$OldVersion in Programs\Hallym MIPS"
+Check (($s1.folders -join '|') -eq 'Hallym RISC-V') "$OldVersion in Programs\Hallym RISC-V"
 
 Note "== $NewVersion over it"
 Install $New
 $s2 = State 'after'
 Check ($s2.entries.Count -eq 1) 'one uninstall entry'
 Check ($s2.entries.Count -ge 1 -and $s2.entries[0].DisplayVersion -eq $NewVersion) "the entry says $NewVersion"
-Check (($s2.folders -join '|') -eq 'Hallym MIPS') 'one install folder, the same one (Programs\Hallym MIPS)'
+Check (($s2.folders -join '|') -eq 'Hallym RISC-V') 'one install folder, the same one (Programs\Hallym RISC-V)'
 Check ($s2.shortcuts.Count -eq 1) 'one Start menu shortcut'
 Check ($s2.version -like "$NewVersion*" -and $s2.version -notlike "$OldVersion*") "the installed program is $NewVersion (was $OldVersion)"
+}
 
 Note "== $NewVersion again, over itself"
 Install $New
 $s2b = State 'again'
 Check ($s2b.entries.Count -eq 1 -and $s2b.entries[0].DisplayVersion -eq $NewVersion) "installed again: one uninstall entry, $NewVersion"
-Check (($s2b.folders -join '|') -eq 'Hallym MIPS') 'installed again: one install folder'
+Check (($s2b.folders -join '|') -eq 'Hallym RISC-V') 'installed again: one install folder'
 Check ($s2b.shortcuts.Count -eq 1) 'installed again: one Start menu shortcut'
 
 Note "== uninstall"

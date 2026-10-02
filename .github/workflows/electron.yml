@@ -1,15 +1,48 @@
-# The Electron edition (electron/) with the real engine (RARS in a JVM):
-# type check, the unit tests (decoder against RARS, the engine host, memory,
-# encodings), every e2e test in a real window; on Linux and on Windows.
+# The Electron edition (electron/) with the real engine (RARS in a JVM).
+# The structure is the Hallym MIPS edition's (v2.7.1, electron.yml), for an
+# app whose engine is a child process with its own Java runtime.
 #
-# The JDK is the one the app will bundle (CLAUDE.md, "JDK"): Eclipse Temurin 21.0.12.
+#   linux     type check, unit tests (decoder against RARS, the engine host,
+#             memory, encodings), the decoder's oracle, the engine process
+#             measured, every e2e test in a real window (xvfb)
+#   widths    every e2e test at the four widths (1280, 1093, 1024, 910) and
+#             once more with 1920x1040 as every test's window (CLAUDE.md,
+#             release rule 3)
+#   windows   0. the screen 1920x1080, Windows' animation effects on
+#             1. the engine (the SessionStart hook, in Git Bash): RARS built
+#                from its pinned commit, the engine's classes
+#             2. type check, unit tests, document links
+#             3. the engine process on Windows, measured with the JDK
+#             4. the package: the NSIS installer (per user), one file; its
+#                size and what it is made of (build/package/sizes.json)
+#             5. /S: installs silently, starts nothing (install-silent.ps1)
+#             6. the engine process measured again with the installed jlink
+#                runtime; every e2e test against the INSTALLED app, at its
+#                own size and at 1920x1040; the real Korean IME (an attempt)
+#             7. the fixed set of screens, captured on Windows
+#             8. the installer as a student runs it, with its pages, pictured
+#                (check-installer-ui.ps1), then uninstalled
+#   upgrade   (every push to main, and by hand) this build over the latest
+#             published release -- none yet before the first: then this
+#             build alone and over itself (check-upgrade.ps1)
+#   tag v*    the release, built by nobody: the installer of the tagged
+#             commit's own run (its commit checked to be the tag's, its
+#             build, e2e, installer pages and upgrade passed) published as
+#             it is, with the notes the commit carries and its SHA-256;
+#             then release-check.yml (downloaded from the public address,
+#             hash, install, every e2e, links, Latest).  A failure anywhere
+#             opens an issue.
+#
+# The JDK is the one the app bundles (CLAUDE.md, "JDK"): Eclipse Temurin 21.0.12.
 name: electron
 
 on:
   push:
-    paths: ['electron/**', 'probe/**', 'docs/engine-protocol.md', '.claude/hooks/**', '.github/workflows/electron.yml']
+    branches: ['**']
+    tags: ['v*']
+    paths: ['electron/**', 'probe/**', 'docs/**', 'README.md', 'NOTICE', '.claude/hooks/**', '.github/workflows/electron.yml', '.github/workflows/release-check.yml']
   pull_request:
-    paths: ['electron/**', 'probe/**', 'docs/engine-protocol.md', '.claude/hooks/**', '.github/workflows/electron.yml']
+    paths: ['electron/**', 'probe/**', 'docs/**', 'README.md', 'NOTICE', '.claude/hooks/**', '.github/workflows/electron.yml']
   workflow_dispatch:
 
 defaults:
@@ -19,6 +52,7 @@ defaults:
 jobs:
   linux:
     name: Type check, unit tests, e2e (Linux)
+    if: github.ref_type != 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -35,12 +69,12 @@ jobs:
         run: |
           echo "RARS_HOME=$RUNNER_TEMP/rars" >> "$GITHUB_ENV"
           RARS_HOME="$RUNNER_TEMP/rars" CLAUDE_PROJECT_DIR="$PWD" .claude/hooks/session-start.sh
-      - name: npm ci
-        run: npm ci
       - name: Type check
         run: npx tsc --noEmit -p .
       - name: Unit tests
         run: npm test
+      - name: Every document's links and pictures (none broken, none unused)
+        run: node tools/check-doc-links.ts
       - name: The engine process, measured (tools/engine-windows.ts; Windows below is what it is for)
         run: node tools/engine-windows.ts --out report
       - name: The decoder's oracle is what RARS says today
@@ -50,22 +84,49 @@ jobs:
       - name: Every e2e test (a real window, xvfb)
         env:
           ELECTRON_DISABLE_SANDBOX: '1'   # Ubuntu 24.04 runners forbid the unprivileged user namespaces Chromium's sandbox needs
-        run: node tools/build-ui.ts && xvfb-run -a npx playwright test
+        run: node tools/build-ui.ts && xvfb-run -a -s '-screen 0 2400x1400x24' npx playwright test
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: e2e-results
-          path: electron/test-results/
+          path: |
+            electron/report/
+            electron/test-results/
           if-no-files-found: ignore
 
-  # Windows, where the students are.  The engine is a child process here, which
-  # the MIPS edition never had: tools/engine-windows.ts measures it (cold start,
-  # Korean through stdio, kill, orphans) and tests/e2e/engine-process.e2e.ts
-  # checks the console window and the engines a closed or killed app leaves.
-  windows:
-    name: Windows — unit, e2e, the engine process measured
-    runs-on: windows-latest
+  widths:
+    name: e2e at the four widths and at 1920 (Linux)
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      ELECTRON_DISABLE_SANDBOX: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21.0.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The engine
+        working-directory: .
+        run: |
+          echo "RARS_HOME=$RUNNER_TEMP/rars" >> "$GITHUB_ENV"
+          RARS_HOME="$RUNNER_TEMP/rars" CLAUDE_PROJECT_DIR="$PWD" .claude/hooks/session-start.sh
+      - name: Every e2e test at 1280, 1093, 1024 and 910 (tools/e2e-widths.ts)
+        run: node tools/build-ui.ts && xvfb-run -a -s '-screen 0 2400x1400x24' node tools/e2e-widths.ts
+      - name: Every e2e test with 1920x1040 as every test's window
+        run: SPIM_E2E_SIZE=1920x1040 xvfb-run -a -s '-screen 0 2400x1400x24' npx playwright test
+
+  windows:
+    name: Windows — build, test, package, install
+    if: github.ref_type != 'tag'   # a tag publishes what its commit's run built and checked (job `tested`)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # no code signing
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -83,7 +144,8 @@ jobs:
         run: tools/windows/screen-1920.ps1 -Report report
 
       # Windows' animation effects on, as on the students' PCs: with them off
-      # (the runner's default) Chromium reports prefers-reduced-motion.
+      # (the runner's default) Chromium reports prefers-reduced-motion and the
+      # first screen shows its still instead of the video.
       - name: Animation effects on (tools/windows/animations-on.ps1)
         continue-on-error: true
         shell: powershell
@@ -101,38 +163,319 @@ jobs:
         run: npx tsc --noEmit -p .
       - name: Unit tests
         run: npm test
+      - name: Every document's links and pictures (none broken, none unused)
+        run: node tools/check-doc-links.ts
 
-      - name: The engine process on Windows, measured (tools/engine-windows.ts)
-        run: node tools/engine-windows.ts --out report
+      - name: The engine process on Windows, measured with the JDK (tools/engine-windows.ts)
+        run: node tools/engine-windows.ts --out report/engine-jdk
 
-      - name: Every e2e test
-        timeout-minutes: 25
+      - name: Package (NSIS installer, the jlink runtime, RARS)
+        run: node tools/package.ts
+
+      - name: The package is one file, the installer; its size and what it is made of
+        shell: pwsh
         run: |
-          node tools/build-ui.ts
+          $files = @(Get-ChildItem dist -File | Where-Object { $_.Extension -in '.exe', '.zip', '.msi' })
+          $files | ForEach-Object { '{0}  {1:N1} MB  ({2} bytes)' -f $_.Name, ($_.Length / 1MB), $_.Length } | Tee-Object -FilePath sizes.txt
+          if ($files.Count -ne 1 -or $files[0].Name -notlike 'HallymRISCV-*-win-x64-setup.exe') {
+            throw "expected one file, HallymRISCV-<version>-win-x64-setup.exe; got: $($files.Name -join ', ')"
+          }
+          Get-Content build/package/sizes.json
+          Copy-Item build/package/sizes.json report/sizes.json
+          Write-Host "PASS  one file: $($files[0].Name)"
+
+      - name: Install with /S (silent, per user, starts nothing)
+        shell: pwsh
+        run: tools/windows/install-silent.ps1 -Setup (Get-Item dist/*-setup.exe).FullName -Report report
+
+      - name: The engine process measured again, with the installed Java runtime
+        shell: pwsh
+        run: node tools/engine-windows.ts --java "$env:LOCALAPPDATA\Programs\Hallym RISC-V\resources\engine\runtime\bin\java.exe" --out report/engine-installed
+
+      - name: e2e against the installed app
+        timeout-minutes: 30
+        shell: pwsh
+        run: |
+          $env:SPIM_E2E_EXE = (Get-Content report/installed.txt).Trim()
           npx playwright test
 
+      - name: e2e against the installed app, 1920x1040 as every test's window
+        timeout-minutes: 30
+        shell: pwsh
+        run: |
+          $env:SPIM_E2E_EXE = (Get-Content report/installed.txt).Trim()
+          $env:SPIM_E2E_SIZE = '1920x1040'
+          npx playwright test --output test-results-1920
+
       # An attempt, reported either way: the real Microsoft Korean IME
-      # (tests/e2e/ime.e2e.ts, through CDP, is the check that counts).
+      # (tests/e2e/ime.e2e.ts, in the steps above, is the check that counts:
+      # the IME's events through CDP).
       - name: Korean IME on the runner (tools/windows/korean-ime.ps1)
         id: koime
         continue-on-error: true
         timeout-minutes: 20
         shell: pwsh
         run: tools/windows/korean-ime.ps1 -Report report
-      - name: e2e with the real Korean IME
+      - name: e2e with the real Korean IME, installed app
         if: steps.koime.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 5
         shell: pwsh
         run: |
+          $env:SPIM_E2E_EXE = (Get-Content report/installed.txt).Trim()
           $env:SPIM_REAL_IME = '1'
-          npx playwright test tests/e2e/ime-real.e2e.ts
+          npx playwright test tests/e2e/ime-real.e2e.ts --output test-results-ime
 
-      - uses: actions/upload-artifact@v4
+      - name: The fixed set of screens (docs/screens/README.md), captured on Windows
+        if: always() && hashFiles('electron/report/installed.txt') != ''
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $env:SPIM_E2E_EXE = (Get-Content report/installed.txt).Trim()
+          $env:SCREENS_OUT = 'report/screens'
+          node tools/capture-screens.ts
+
+      - name: Uninstall the silent install
+        if: always() && hashFiles('electron/report/installed.txt') != ''
+        shell: pwsh
+        run: |
+          $e = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
+            ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -like 'Hallym RISC-V*' } | Select-Object -First 1
+          if ($e) {
+            $un = ($e.QuietUninstallString, $e.UninstallString | Where-Object { $_ } | Select-Object -First 1)
+            if ($un -match '^"([^"]+)"\s*(.*)$') { $x = $Matches[1]; $a = $Matches[2] } else { $x = $un; $a = '' }
+            if ($a -notmatch '/S') { $a = "$a /S" }
+            Start-Process $x -ArgumentList $a -Wait
+            Start-Sleep -Seconds 3
+            Write-Host 'uninstalled'
+          }
+
+      - name: The installer with its pages (tools/windows/check-installer-ui.ps1)
+        if: always() && hashFiles('electron/dist/*-setup.exe') != ''
+        timeout-minutes: 10
+        shell: pwsh
+        run: tools/windows/check-installer-ui.ps1 -Setup (Get-Item dist/*-setup.exe).FullName -Report report/installer
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: HallymRISCV-windows
+          path: electron/dist/*-setup.exe
+          if-no-files-found: error
+
+      - name: Upload the report
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: windows-report
           path: |
+            electron/sizes.txt
             electron/report/
             electron/test-results/
+            electron/test-results-1920/
+            electron/test-results-ime/
           if-no-files-found: ignore
+
+  # This build over the one students may already have: the latest published
+  # release, downloaded from its release page.  Before the first release
+  # there is none: then this build alone, then over itself.
+  upgrade:
+    name: Install over the latest release (or, before the first, over itself)
+    needs: windows
+    if: github.ref_type != 'tag'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: This run's installer
+        uses: actions/download-artifact@v4
+        with:
+          name: HallymRISCV-windows
+          path: electron/new
+
+      - name: The latest published release's installer (none: the first release)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releases = @(gh release list --repo $env:GITHUB_REPOSITORY --exclude-drafts --exclude-pre-releases --limit 100 --json tagName,publishedAt | ConvertFrom-Json)
+          $tag = ($releases | Where-Object { $_.tagName -like 'v*' -and $_.tagName -ne $env:GITHUB_REF_NAME } |
+            Sort-Object { [datetime]$_.publishedAt } -Descending | Select-Object -First 1).tagName
+          New-Item -ItemType Directory -Force released | Out-Null
+          if (-not $tag) {
+            "none" | Set-Content released/tag.txt
+            Write-Host "no published release yet: this build is the first (it is installed alone, then over itself)"
+            exit 0
+          }
+          gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern '*-setup.exe' --dir released
+          "$tag" | Set-Content released/tag.txt
+          Get-ChildItem released | ForEach-Object { $_.Name }
+
+      - name: This build over the latest release (or alone, then over itself)
+        shell: pwsh
+        run: |
+          $old = (Get-Content released/tag.txt).Trim()
+          $new = (Get-Content package.json | ConvertFrom-Json).version
+          $setup = (Get-Item new/*-setup.exe).FullName
+          if ($old -eq 'none') {
+            tools/windows/check-upgrade.ps1 -New $setup -NewVersion $new -Report upgrade/release
+            "first release: $new alone, then over itself" | Add-Content upgrade/release/upgrade.txt
+            exit $LASTEXITCODE
+          }
+          $old = $old.TrimStart('v')
+          if ($new -eq $old) {
+            if ($env:GITHUB_REF_TYPE -eq 'tag') { throw "this build is $new, the version of the latest release: raise the version in the release commit" }
+            New-Item -ItemType Directory -Force upgrade/release | Out-Null
+            "not run: this build is $new, the version of the latest release (v$old)" | Set-Content upgrade/release/upgrade.txt
+            Write-Host "::notice title=Upgrade over v$old not run::This build is $new, the version of the latest release. The check runs on the release commit, where the version is raised."
+            exit 0
+          }
+          tools/windows/check-upgrade.ps1 -Old (Get-Item released/*-setup.exe).FullName -OldVersion $old -New $setup -NewVersion $new -Report upgrade/release
+
+      - name: Upload the upgrade report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-report
+          path: electron/upgrade/
+          if-no-files-found: ignore
+
+  # A v* tag: the installer its commit's own run built and checked.  That run
+  # -- a push to main or a dispatch -- must be for this very commit, and its
+  # build, e2e, installer pages and upgrade must all have passed, the upgrade
+  # having really run (not "not run").  Otherwise nothing is published.
+  tested:
+    name: The installer this commit's run checked
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Find that run; take its installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="$GITHUB_SHA"
+          chosen=''
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/electron.yml/runs?head_sha=$sha&per_page=50" \
+                        --jq '.workflow_runs[] | select((.event == "push" or .event == "workflow_dispatch") and .head_branch == "main") | .id'); do
+            passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" \
+              --jq '[.jobs[] | select(.conclusion == "success") | .name] | map(select(startswith("Windows — build") or startswith("Install over the latest") or startswith("Type check, unit tests") or startswith("e2e at the four widths"))) | length')
+            if [ "$passed" = 4 ]; then chosen=$id; break; fi
+          done
+          [ -n "$chosen" ] || { echo "::error::no run of electron.yml on main for $sha whose build, tests and upgrade passed: push the release commit to main and let its run finish before tagging"; exit 1; }
+          run_sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$chosen" --jq .head_sha)
+          [ "$run_sha" = "$sha" ] || { echo "::error::run $chosen built $run_sha, not the tagged $sha"; exit 1; }
+          gh run download "$chosen" --repo "$GITHUB_REPOSITORY" -n upgrade-report -D upgrade
+          if grep -q '^not run' upgrade/release/upgrade.txt; then
+            echo "::error::run $chosen did not install over the latest release: $(head -1 upgrade/release/upgrade.txt)"; exit 1
+          fi
+          gh run download "$chosen" --repo "$GITHUB_REPOSITORY" -n HallymRISCV-windows -D dist
+          echo "TESTED_RUN=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$chosen" >> "$GITHUB_ENV"
+          echo "the installer of run $chosen (commit $run_sha): $(ls dist)"
+          sha256sum dist/*
+
+      - name: Hand it to this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: HallymRISCV-windows
+          path: dist/*-setup.exe
+          if-no-files-found: error
+
+      - name: Which run it came from
+        run: echo "$TESTED_RUN" > tested-run.txt
+
+      - name: Hand that on too
+        uses: actions/upload-artifact@v4
+        with:
+          name: tested-run
+          path: tested-run.txt
+
+  publish:
+    name: Publish the release
+    needs: tested
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The installer the release commit's run checked
+        uses: actions/download-artifact@v4
+        with:
+          name: HallymRISCV-windows
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tested-run
+
+      - name: The version, the notes, the installer, its SHA-256
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          package=$(node -p "require('./electron/package.json').version")
+          [ "$package" = "$version" ] || { echo "::error::the tag is $GITHUB_REF_NAME but electron/package.json says $package"; exit 1; }
+          notes="electron/docs/releases/$version.md"
+          [ -f "$notes" ] || { echo "::error::no release notes for $version: $notes"; exit 1; }
+          setup="dist/HallymRISCV-$version-win-x64-setup.exe"
+          [ -f "$setup" ] || { echo "::error::no $setup"; exit 1; }
+          [ "$(ls dist | wc -l)" = 1 ] || { echo "::error::the package is not one file: $(ls dist)"; exit 1; }
+          hash=$(sha256sum "$setup" | cut -d' ' -f1)
+          {
+            cat "$notes"
+            printf '\n## SHA-256\n\nBuilt and checked by CI from the commit the tag `%s` names (%s), in %s; published as it is. To check the download on Windows: `certutil -hashfile <file> SHA256`.\n\n```\n%s  %s\n```\n' \
+              "$GITHUB_REF_NAME" "${GITHUB_SHA::7}" "$(cat tested-run.txt)" "$hash" "$(basename "$setup")"
+          } > release-notes.md
+          echo "SETUP=$setup" >> "$GITHUB_ENV"
+          echo "$hash  $(basename "$setup")"
+
+      - name: Publish (not a pre-release; Latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$SETUP" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "Hallym RISC-V ${GITHUB_REF_NAME#v}" --notes-file release-notes.md --latest
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json url,isDraft,isPrerelease,assets \
+            --jq '"\(.url)  draft=\(.isDraft) prerelease=\(.isPrerelease)  " + ([.assets[].name] | join(", "))'
+
+  # Then the release as a student gets it (release-check.yml).
+  release-check:
+    name: The published release, as downloaded
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/release-check.yml
+    with:
+      tag: ${{ github.ref_name }}
+
+  # A tag whose checked installer, publishing or post-release check failed:
+  # an issue says so, so that it cannot go unnoticed.
+  release-failed:
+    name: Report a failed release
+    needs: [tested, publish, release-check]
+    if: failure() && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Open an issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "Release $GITHUB_REF_NAME failed" --body "The workflow for the tag \`$GITHUB_REF_NAME\` failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          The checked installer from the commit's run: ${{ needs.tested.result }}; publish: ${{ needs.publish.result }}; post-release check: ${{ needs.release-check.result }}.
+
+          If the release was published and its check failed, see electron/docs/WINDOWS.md, \"Rolling back a release\"."

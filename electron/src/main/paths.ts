@@ -1,13 +1,15 @@
 /* Where the app's own files are.  Run from the source tree (npm run
-   electron, the e2e tests) they are where the repository keeps them.  The
-   packaged layout (MIPS edition: tools/package.ts, SPIM_BUNDLE) is not
-   built for the RISC-V edition yet; the bundled branches are kept so the
-   shape stays the MIPS app's.
+   electron, the e2e tests) they are where the repository keeps them;
+   packaged (tools/package.ts, SPIM_BUNDLE), next to the bundle and in the
+   package's resources.
 
-   The engine (docs/engine-protocol.md) is a JVM: `java` (ENGINE_JAVA, else
-   the one on PATH -- later the bundled jlink runtime), the engine's classes
-   (probe/build/classes, built by probe/run.sh build or the SessionStart
-   hook) and the RARS jar (RARS_JAR, else where probe/setup.sh puts it). */
+   The engine (docs/engine-protocol.md) is a JVM: `java`, the engine's
+   classes and the RARS jar.  Packaged: resources/engine/ -- the jlink
+   runtime, classes/, rars.jar (tools/package.ts).  From the source tree:
+   ENGINE_JAVA, else the java on PATH; probe/build/classes (probe/run.sh
+   build, or the SessionStart hook); RARS_JAR, else the jar probe/setup.sh
+   builds from RARS's pinned commit.  ENGINE_JAVA, ENGINE_CLASSES and RARS_JAR
+   override either (the tests point a packaged app at another engine). */
 
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
@@ -30,6 +32,12 @@ export const paths = {
 
 const repo = path.join(root, '..');
 export function engine(): { java: string; classpath: string } {
+  if (bundled) {
+    const dir = path.join(process.resourcesPath, 'engine');
+    const java = path.join(dir, 'runtime', 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+    return { java: process.env.ENGINE_JAVA ?? java,
+      classpath: [process.env.ENGINE_CLASSES ?? path.join(dir, 'classes'), process.env.RARS_JAR ?? path.join(dir, 'rars.jar')].join(path.delimiter) };
+  }
   const rarsHome = process.env.RARS_HOME ?? path.join(process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), '.cache'), 'hallym-riscv', 'rars');
   const jar = process.env.RARS_JAR ?? path.join(rarsHome, 'rars-src.jar');
   const classes = process.env.ENGINE_CLASSES ?? path.join(repo, 'probe', 'build', 'classes');
