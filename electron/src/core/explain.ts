@@ -1,8 +1,9 @@
 /* One sentence that says what an instruction does, with the values it will
    use -- the Inspector's line under the picture.  Pure: it takes the
    decoded word and the register values *before* the instruction runs.
-   (The MIPS edition's explain.ts, for RV32I's R and I instructions; the
-   other formats come with their decoder entries.)
+   (The MIPS edition's explain.ts, for RV32I and the M and F instructions
+   the course meets, in all six formats.)  Branches, jumps and auipc also
+   need the instruction's own address (pc): their target is relative to it.
 
    Code -- register names, numbers taken from the machine -- is wrapped in
    backticks, which the view sets in the monospaced font.  A particle always
@@ -30,6 +31,20 @@ const TITLES: Record<string, string> = {
   sltiu: 'Set if Less Than Immediate, Unsigned', slli: 'Shift Left Logical Immediate', srli: 'Shift Right Logical Immediate',
   srai: 'Shift Right Arithmetic Immediate', lw: 'Load Word', lh: 'Load Halfword', lb: 'Load Byte', lhu: 'Load Halfword, Unsigned',
   lbu: 'Load Byte, Unsigned', jalr: 'Jump And Link Register', ecall: 'Environment Call', ebreak: 'Environment Break',
+  sb: 'Store Byte', sh: 'Store Halfword', sw: 'Store Word', beq: 'Branch if Equal', bne: 'Branch if Not Equal',
+  blt: 'Branch if Less Than', bge: 'Branch if Greater or Equal', bltu: 'Branch if Less Than, Unsigned',
+  bgeu: 'Branch if Greater or Equal, Unsigned', lui: 'Load Upper Immediate', auipc: 'Add Upper Immediate to PC',
+  jal: 'Jump And Link', flw: 'Load Float Word', fld: 'Load Float Doubleword', fsw: 'Store Float Word', fsd: 'Store Float Doubleword',
+};
+
+// Branches: the condition in words, and whether it holds for the values.
+const BRANCH: Record<string, { says: string; holds: (a: number, b: number) => boolean; unsigned: boolean }> = {
+  beq: { says: '같으면', holds: (a, b) => a === b, unsigned: false },
+  bne: { says: '다르면', holds: (a, b) => a !== b, unsigned: false },
+  blt: { says: '보다 작으면', holds: (a, b) => (a | 0) < (b | 0), unsigned: false },
+  bge: { says: '보다 크거나 같으면', holds: (a, b) => (a | 0) >= (b | 0), unsigned: false },
+  bltu: { says: '보다 작으면', holds: (a, b) => a >>> 0 < b >>> 0, unsigned: true },
+  bgeu: { says: '보다 크거나 같으면', holds: (a, b) => a >>> 0 >= b >>> 0, unsigned: true },
 };
 
 // RARS's syscalls (a7), by the names the course uses.
@@ -40,7 +55,7 @@ const SYSCALLS: Record<number, string> = {
   12: 'ReadChar — 문자 하나를 읽어 `a0` 레지스터에', 93: 'Exit2 — `a0` 값을 종료 코드로 끝냄',
 };
 
-function sentence(d: DecodedInstruction, regs: readonly number[]): string {
+function sentence(d: DecodedInstruction, regs: readonly number[], pc: number | null): string {
   const { rd, rs1, rs2, imm, name } = d;
   const to = `${reg(rd)} 레지스터에 넣습니다.`;
   const ops: Record<string, string> = { and: 'AND', or: 'OR', xor: 'XOR', andi: 'AND', ori: 'OR', xori: 'XOR' };
@@ -81,13 +96,42 @@ function sentence(d: DecodedInstruction, regs: readonly number[]): string {
       return call ? `${code('a7')} 값(${code(regs[17])}): ${call}.` : `${code('a7')} 값(${code(regs[17] ?? 0)})의 시스템 호출을 부릅니다.`;
     }
     case 'ebreak': return '여기서 멈춥니다(디버거로 제어를 넘깁니다).';
+    case 'sw': case 'sh': case 'sb': {
+      const addr = ((regs[rs1] ?? 0) + imm) >>> 0;
+      const size = { sw: '4바이트', sh: '아래 2바이트', sb: '아래 1바이트' }[name];
+      return `${val(regs, rs2)}의 ${size} 값을 ${val(regs, rs1)}에 오프셋(${code(imm)})을 더한 ${code(hex32(addr))} 주소에 씁니다.`;
+    }
+    case 'flw': case 'fld': case 'fsw': case 'fsd': {
+      const addr = ((regs[rs1] ?? 0) + imm) >>> 0;
+      const size = name.endsWith('w') ? '4바이트' : '8바이트';
+      return name.startsWith('fl')
+        ? `${val(regs, rs1)}에 오프셋(${code(imm)})을 더한 ${code(hex32(addr))} 주소에서 읽은 ${size} 값을 ${code(`f${rd}`)} 레지스터에 넣습니다.`
+        : `${code(`f${rs2}`)} 레지스터의 ${size} 값을 ${val(regs, rs1)}에 오프셋(${code(imm)})을 더한 ${code(hex32(addr))} 주소에 씁니다.`;
+    }
+    case 'beq': case 'bne': case 'blt': case 'bge': case 'bltu': case 'bgeu': {
+      const b = BRANCH[name];
+      const where = pc === null ? `오프셋(${code(imm)}) 만큼 떨어진 곳` : `${code(hex32((pc + imm) >>> 0))} 주소(명령 자신의 주소 + 오프셋 ${code(imm)})`;
+      const now = b.holds(regs[rs1] ?? 0, regs[rs2] ?? 0) ? '지금 값으로는 분기합니다.' : '지금 값으로는 분기하지 않고 다음 명령으로 갑니다.';
+      const cmp = name === 'beq' || name === 'bne' ? `${val(regs, rs1)}과 ${val(regs, rs2)}이 ${b.says}` : `${val(regs, rs1)}이 ${val(regs, rs2)}${b.says}`;
+      return `${cmp} ${where}로 분기합니다${b.unsigned ? '(부호 없는 비교)' : ''}. ${now}`;
+    }
+    case 'lui': return `즉시값(${code(hex32(imm))})을 ${to} 위 20비트에 값을 두고 아래 12비트는 0으로 채웁니다.`;
+    case 'auipc':
+      return pc === null ? `명령 자신의 주소에 즉시값(${code(hex32(imm))})을 더해 ${to}`
+        : `명령 자신의 주소(${code(hex32(pc))})에 즉시값(${code(hex32(imm))})을 더한 ${code(hex32((pc + imm) >>> 0))} 값을 ${to}`
+          + ' (`la` 명령은 `auipc` 명령과 `addi` 명령 둘로 바뀌는데, 그 앞의 것입니다.)';
+    case 'jal': {
+      const where = pc === null ? `오프셋(${code(imm)}) 만큼 떨어진 곳` : `${code(hex32((pc + imm) >>> 0))} 주소(명령 자신의 주소 + 오프셋 ${code(imm)})`;
+      return `${where}로 뜁니다. ` + (rd === 0 ? '돌아올 주소는 남기지 않습니다(`j` 명령).'
+        : `다음 명령의 주소${pc === null ? '' : `(${code(hex32((pc + 4) >>> 0))})`}를 ${reg(rd)} 레지스터에 남깁니다.`);
+    }
     default: return '';
   }
 }
 
-export function explain(d: DecodedInstruction, regs: readonly number[]): Explanation {
+export function explain(d: DecodedInstruction, regs: readonly number[], pc: number | null = null): Explanation {
   const t = TITLES[d.name];
-  return { title: d.name ? (t ? `${d.name} — ${t}` : d.name) : '알 수 없는 명령', sentence: sentence(d, regs) };
+  return { title: d.name ? (t ? `${d.name} — ${t}` : d.name) : '알 수 없는 명령', sentence: sentence(d, regs, pc) };
 }
 
 /* "`x5` 값(...)" -> parts, the backticked ones as code. */

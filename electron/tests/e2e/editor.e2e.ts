@@ -30,9 +30,9 @@ test('an assembly error: under the Editor, what is wrong then what to do, and a 
   // The line's number twice at most: in the error and on the button.
   expect(((await panel.locator('.notice').textContent()) ?? '').split('3행').length - 1).toBeLessThanOrEqual(2);
   await expect(panel.locator('img.char')).toBeHidden(); // the words alone, right under the Editor
-  // RARS's own words (docs/engine-protocol.md 6.1).  (The MIPS edition named the slip, "혹시 srl?":
-  // its near-miss hints are not ported -- RARS's message already names the operator.)
+  // RARS's own words (docs/engine-protocol.md 6.1), then the slip named (src/core/near-miss.ts).
   await expect(panel.locator('.item .what')).toHaveText('"srll" is not a recognized operator');
+  await expect(panel.locator('.item .hint')).toHaveText('srll 명령은 없습니다. 혹시 srl?');
   await expect(panel.locator('.item .src')).toHaveText('srll t1, t0, 1');
   await expect(page.locator('.cm-error-gutter .cm-error-mark')).toHaveText('!');
   await expect(page.locator('.cm-bp-dot')).toHaveCount(0);
@@ -40,8 +40,21 @@ test('an assembly error: under the Editor, what is wrong then what to do, and a 
   expect(await page.evaluate(() => document.getSelection()?.anchorNode?.parentElement?.closest('.cm-line')?.textContent)).toBe('  srll t1, t0, 1');
 });
 
+test('the error list names a MIPS habit and a register that does not exist', async () => {
+  const { page } = r;
+  await openAndAssemble(r, program(r.dir, 'mips.s', 'main:\n  li $t0, 5\n  add t7, t0, t0\n  syscall\n  lw t1, 0(spp)\n'));
+  expect(await page.locator('.asm .item .hint').allInnerTexts()).toEqual([
+    'RISC-V 레지스터 이름에는 $ 기호가 없습니다: $t0 → t0.',
+    't7 레지스터는 없습니다. t 레지스터는 t0–t6 입니다.',
+    'syscall 명령은 MIPS 명령입니다. RISC-V 에서는 ecall 명령을 씁니다.',
+    'spp 레지스터는 없습니다. 혹시 sp?',
+  ]);
+});
+
 test('breakpoints from the Editor\'s gutter: set before assembling, kept, stopped at, shown in Text', async () => {
   const { page } = r;
+  await page.getByRole('button', { name: /바로 시작/ }).click();
+  await page.getByRole('button', { name: /새 파일/ }).first().click();
   await openAndAssemble(r, program(r.dir, 'p.s', PROGRAM));
   await gutterAt(5).click(); // add t2 ...
   await expect(page.locator('.cm-bp-dot')).toHaveCount(1);
@@ -91,7 +104,7 @@ test('the window\'s own dialogs: a new file is asked about even when saved; unsa
   await page.getByTitle('New file').click();
   const dialog = page.locator('dialog.ask');
   await expect(dialog).toBeVisible();
-  await expect(dialog.locator('img.char')).toHaveCount(0); // no character in this edition
+  await expect(dialog.locator('img.char')).toHaveCount(1);
   await expect(dialog).toContainText('저장되어 있습니다');
   await dialog.getByRole('button', { name: '돌아가기' }).click();
   await expect(page.locator('.titlebar .file')).toContainText('p.s');
@@ -111,6 +124,8 @@ test('the window\'s own dialogs: a new file is asked about even when saved; unsa
 
 test('typing: Tab is four columns, Shift+Tab takes four back, Enter starts at column 0', async () => {
   const { page } = r;
+  await page.getByRole('button', { name: /바로 시작/ }).click();
+  await page.getByRole('button', { name: /새 파일/ }).first().click();
   await page.locator('.cm-content').click();
   const doc = () => page.evaluate(() => [...document.querySelectorAll('.cm-line')].map((l) => l.textContent).join('\n'));
   await page.keyboard.press('Tab');
@@ -127,3 +142,18 @@ test('typing: Tab is four columns, Shift+Tab takes four back, Enter starts at co
   expect(await doc()).toBe('    li  t0, 5\nx');
 });
 
+test('the first screen keeps its shape from one step to the other, and the window its size into the work', async () => {
+  const { page, app } = r;
+  const box = async (sel: string) => (await page.locator(sel).boundingBox())!;
+  const card1 = await box('.wcard');
+  const first1 = await box('.actions .action >> nth=0');
+  const lead1 = await box('.wcard .lead');
+  await page.getByRole('button', { name: /바로 시작/ }).click();
+  expect(await box('.wcard')).toEqual(card1);
+  expect(await box('.actions .action >> nth=0')).toEqual(first1);
+  expect(await box('.wcard .lead')).toEqual(lead1);
+  const size = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize());
+  await page.getByRole('button', { name: /새 파일/ }).first().click();
+  await expect(page.locator('.editor-panel')).toBeVisible();
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize())).toEqual(size);
+});

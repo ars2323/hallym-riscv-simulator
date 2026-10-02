@@ -1,0 +1,379 @@
+/* The tutorial (src/renderer/app/tutorial.ts, docs/PORTING.md 18, 25, 30):
+   - all twenty-one steps, walked with the real actions, at 1280x800,
+     1093x582 (a lab PC), 1024x728 and 910x505 (the narrow window): at every
+     step what it points at is on screen, and the card covers none of it (a
+     click at a target's middle reaches the target, not the tutorial) and
+     stands next to the first (within NEAR); the panel each target is in is
+     lit whole and the rest of the window dimmed; a box on each target;
+     step 20, the Editor at the line to fix;
+   - the same walk with [건너뛰기] at every practice step;
+   - stopping at step 16 while the slow run goes;
+   - the examples on disk unchanged; a student's unsaved file back as it
+     was; a new start of the program begins at step 1 again. */
+
+import { expect, test, type Page } from '@playwright/test';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
+import { launch, openAndAssemble, resize, root, sample, type Running } from './harness.ts';
+
+interface Shown { step: number; phase: number; result: boolean; hits: boolean[]; did: string[]; targets: { left: number; top: number; right: number; bottom: number }[]; lit: { left: number; top: number; right: number; bottom: number }[]; card: { left: number; top: number; right: number; bottom: number } | null }
+const shown = (page: Page) => page.evaluate(() => (window as unknown as { __tutorial: { shown: Shown; active: boolean } }).__tutorial.shown);
+const active = (page: Page) => page.evaluate(() => (window as unknown as { __tutorial: { active: boolean } }).__tutorial.active);
+const NEAR = 48; // px, card to first target (checkStep)
+const hash = (name: string) => createHash('sha256').update(readFileSync(path.join(root, 'src/examples', name))).digest('hex');
+
+async function atStep(page: Page, n: number, phase = 0, result = false): Promise<Shown> {
+  await expect.poll(async () => { const s = await shown(page); return `${s.step}.${s.phase}.${s.result ? 'done' : ''}`; }, { timeout: 15_000 }).toBe(`${n}.${phase}.${result ? 'done' : ''}`);
+  // Laid out for this step, and settled (the Data tab and lists redraw).
+  let last = '';
+  for (let i = 0; i < 40; i += 1) {
+    await page.waitForTimeout(100);
+    const s = JSON.stringify(await shown(page));
+    if (s === last && (n === 21 || JSON.parse(s).targets.length > 0)) break;
+    last = s;
+  }
+  return shown(page);
+}
+
+// What the step points at is on screen and the card is clear of it; the
+// middle of each target is the app's (not the dim layer's, not the card's).
+async function checkStep(page: Page, n: number, phase = 0, result = false): Promise<void> {
+  const s = await atStep(page, n, phase, result);
+  const where = `step ${n}.${phase}${result ? ' (result)' : ''}`;
+  // A card is one text, a title and a body: no separate line of instructions.
+  await expect(page.locator('.tut-card .tut-say > p'), where).toHaveCount(1);
+  await expect(page.locator('.tut-card .tut-say h3'), where).toHaveCount(1);
+  // A practice step waits for the student: no [다음] until it is done; its
+  // result then waits with [다음] (and no [건너뛰기]).
+  const kind = await page.evaluate(() => [...document.querySelector('.tut-card')!.classList].find((c) => c.startsWith('kind-')));
+  if (result) {
+    await expect(page.locator('.tut-card.done .tut-next'), where).toBeVisible();
+    await expect(page.locator('.tut-card .tut-skip'), where).toHaveCount(0);
+  } else if (kind === 'kind-practice') {
+    await expect(page.locator('.tut-card .tut-next'), where).toHaveCount(0);
+  }
+  if (n < 20) expect(s.targets.length, where).toBeGreaterThan(0);
+  // Lit whole: the panel each target is in (the title bar for a button, the
+  // status bar), not dimmed; everything else dimmed; a box on each target.
+  const light = await page.evaluate(({ targets, lit }) => {
+    const dim = document.querySelector('.tut-dim path.dim') as SVGPathElement;
+    const dark = (x: number, y: number) => dim.isPointInFill(new DOMPoint(x, y));
+    const inside = (r: { left: number; top: number; right: number; bottom: number }, x: number, y: number) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    // The area each target is in, found under the tutorial's layers.
+    const areas = targets.map((t) => {
+      const x = (t.left + t.right) / 2;
+      const y = (t.top + t.bottom) / 2;
+      const area = document.elementsFromPoint(x, y).map((e) => e.closest('.panel, .titlebar, .status')).find((e) => e !== null);
+      return area ? area.getBoundingClientRect().toJSON() as DOMRect : null;
+    });
+    const areaLit = areas.map((a) => !!a && lit.some((l) => l.left <= a.left + 1 && l.top <= a.top + 1 && l.right >= Math.min(a.right, innerWidth) - 1 && l.bottom >= Math.min(a.bottom, innerHeight) - 1)
+      && [[a.left + 3, a.top + 3], [a.right - 3, a.top + 3], [a.left + 3, a.bottom - 3], [a.right - 3, a.bottom - 3], [(a.left + a.right) / 2, (a.top + a.bottom) / 2]]
+        .filter(([x, y]) => y < innerHeight && x < innerWidth).every(([x, y]) => !dark(x, y)));
+    // Every point of a grid: dark exactly where no lit area is.
+    let wrong = 0;
+    const edge = (x: number, y: number) => lit.some((l) => (Math.abs(x - l.left) < 1.5 || Math.abs(x - l.right) < 1.5) && y >= l.top - 1.5 && y <= l.bottom + 1.5
+      || (Math.abs(y - l.top) < 1.5 || Math.abs(y - l.bottom) < 1.5) && x >= l.left - 1.5 && x <= l.right + 1.5);
+    for (let x = 5; x < innerWidth; x += 37) {
+      for (let y = 5; y < innerHeight; y += 29) if (!edge(x, y) && dark(x, y) === lit.some((l) => inside(l, x, y))) wrong += 1;
+    }
+    const rings = [...document.querySelectorAll('.tut-ring')].map((e) => e.getBoundingClientRect());
+    const boxed = targets.map((t) => rings.some((r) => r.left <= t.left + 0.5 && r.top <= t.top + 0.5 && r.right >= t.right - 0.5 && r.bottom >= t.bottom - 0.5));
+    // Lit is not clickable: a spot of each lit area off the targets takes no click.
+    const near = (x: number, y: number) => targets.some((t) => x >= t.left - 6 && x <= t.right + 6 && y >= t.top - 6 && y <= t.bottom + 6);
+    const refused = lit.map((l) => {
+      const spots = [[l.left + 6, l.top + 6], [l.right - 6, l.bottom - 6], [l.right - 6, l.top + 6], [l.left + 6, l.bottom - 6], [(l.left + l.right) / 2, (l.top + l.bottom) / 2]]
+        .filter(([x, y]) => !near(x, y) && x > 0 && y > 0 && x < innerWidth && y < innerHeight);
+      return spots.length === 0 || spots.every(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.tut'));
+    });
+    return { areaLit, wrong, boxed, rings: rings.length, refused };
+  }, { targets: s.targets, lit: s.lit });
+  expect(light.refused, `${where}: a lit panel off the targets takes no click`).toEqual(s.lit.map(() => true));
+  // The card next to what the step is about: within NEAR of its first target (right below it,
+  // above it or beside it: logic/placement.ts).  Every state of every step reads 16-25 px at the
+  // five widths; before 2.7.0, a toolbar step's card stood under the title bar's middle, 113 px
+  // from Assemble at step 2, and step 19's Assemble panel 248 px away (docs/PORTING.md 30).
+  if (s.targets.length) {
+    const t = s.targets[0], c = s.card!;
+    const apartBy = Math.hypot(Math.max(0, t.left - c.right, c.left - t.right), Math.max(0, t.top - c.bottom, c.top - t.bottom));
+    expect(apartBy, `${where}: the card ${Math.round(apartBy)} px from its target ${JSON.stringify({ t, c })}`).toBeLessThanOrEqual(NEAR);
+  }
+  expect(light.areaLit, `${where}: each target's panel lit whole`).toEqual(s.targets.map(() => true));
+  expect(light.wrong, `${where}: dark exactly outside the lit panels`).toBe(0);
+  expect(light.boxed, `${where}: a box on each target`).toEqual(s.targets.map(() => true));
+  expect(light.rings, where).toBe(s.targets.length);
+  // A click in the middle of each target reaches that very target.
+  expect(s.hits, `${where}: ${JSON.stringify(s.targets)}`).toEqual(s.targets.map(() => true));
+  const w = await page.evaluate(() => [window.innerWidth, window.innerHeight]);
+  if (s.did.length) console.log(`[${w[0]}] step ${n}${phase ? `.${phase}` : ''}: ${s.did.join(', ')}`);
+  for (const t of s.targets) {
+    expect(t.left >= 0 && t.top >= 0 && t.right <= w[0] && t.bottom <= w[1], `${where}: target on screen ${JSON.stringify(t)}`).toBe(true);
+    const c = s.card!;
+    const apart = c.right <= t.left || t.right <= c.left || c.bottom <= t.top || t.bottom <= c.top;
+    expect(apart, `${where}: the card over a target ${JSON.stringify({ t, c })}`).toBe(true);
+    const hit = await page.evaluate(([x, y]) => {
+      const e = document.elementFromPoint(x, y);
+      return e ? (e.closest('.tut') ? 'tutorial' : 'app') : 'nothing';
+    }, [(t.left + t.right) / 2, (t.top + t.bottom) / 2]);
+    expect(hit, `${where}: middle of ${JSON.stringify(t)}`).toBe('app');
+  }
+  const c = s.card!;
+  expect(c.left >= 0 && c.top >= 0 && c.right <= w[0] && c.bottom <= w[1], `${where}: card on screen`).toBe(true);
+  // One Haram on screen, on the card, at its end away from what it points at.
+  const haram = await page.evaluate(() => {
+    const seen = [...document.querySelectorAll('img.char')].filter((e) => e.checkVisibility({ visibilityProperty: true }));
+    const say = document.querySelector('.tut-card .tut-say')!.getBoundingClientRect();
+    const img = document.querySelector('.tut-card img.char')!.getBoundingClientRect();
+    return { count: seen.length, onCard: seen[0]?.closest('.tut-card') !== null, say: (say.left + say.right) / 2, img: (img.left + img.right) / 2 };
+  });
+  expect(haram.count, `${where}: Haram once`).toBe(1);
+  expect(haram.onCard, where).toBe(true);
+  if (s.targets.length) {
+    const tx = (s.targets[0].left + s.targets[0].right) / 2;
+    expect(Math.abs(haram.img - tx) >= Math.abs(haram.say - tx), `${where}: Haram at the far end`).toBe(true);
+  }
+}
+
+const next = (page: Page) => page.locator('.tut-card .tut-next').click();
+const skip = async (page: Page) => { await page.locator('.tut-card .tut-skip').click({ timeout: 10_000 }); };
+const middle = (r: { left: number; top: number; right: number; bottom: number }) => [(r.left + r.right) / 2, (r.top + r.bottom) / 2] as const;
+
+// The practice steps whose result is pointed at before the next step
+// (told to, done, shown what it did, then [다음]); the others go straight on.
+const RESULT = new Set([5, 12, 15, 17, 18]);
+
+// Walks steps 1..21: by doing each practice step, or by skipping it.
+async function walk(page: Page, how: 'do' | 'skip'): Promise<void> {
+  const practice = async (n: number, act: () => Promise<void>, phase = 0) => {
+    await checkStep(page, n, phase);
+    if (how === 'skip') await skip(page); else await act();
+    if (RESULT.has(n)) {
+      await checkStep(page, n, phase, true); // the result beat: on screen, waited for
+      // Keys the step asked for do nothing now; → goes on.
+      await page.keyboard.press('F10');
+      await page.waitForTimeout(200);
+      expect((await shown(page)).result, `step ${n}: still on its result`).toBe(true);
+      await next(page);
+    }
+  };
+  await checkStep(page, 1); await next(page);
+  await practice(2, () => page.keyboard.press('Control+s'));
+  await checkStep(page, 3); await next(page);
+  await checkStep(page, 4);
+  // Both ends of "one line, two instructions" where both sides show.
+  expect((await shown(page)).targets.length).toBe((await page.evaluate(() => window.innerWidth)) < 980 ? 2 : 3);
+  await next(page);
+  await practice(5, () => page.keyboard.press('F10'));
+  for (const n of [6, 7, 8, 9]) {
+    await checkStep(page, n);
+    if (n === 8 || n === 9) {
+      // One highlight in Text: the pinned row, not the PC's band as well.
+      const bands = await page.locator('.trow').evaluateAll((els) => els.filter((e) => {
+        const bg = getComputedStyle(e).backgroundColor;
+        return bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent';
+      }).map((e) => (e as HTMLElement).dataset.addr));
+      expect(bands, `step ${n}: highlighted Text rows`).toHaveLength(1);
+    }
+    if (n === 9) {
+      // A ring for each field, none fused with its neighbour.
+      const rings = await page.locator('.tut-ring').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().toJSON() as DOMRect));
+      expect(rings.length).toBe(5);
+      for (let i = 0; i < rings.length; i += 1) {
+        for (let j = i + 1; j < rings.length; j += 1) {
+          const [a, b] = [rings[i], rings[j]];
+          expect(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top, `rings ${i} and ${j} apart`).toBe(true);
+        }
+      }
+    }
+    await next(page);
+  }
+  await practice(10, () => page.locator('.textpanel .ptab', { hasText: 'Data' }).click());
+  await checkStep(page, 11); await next(page);
+  await practice(12, async () => {
+    for (let i = 0; i < 20; i += 1) { const s = await shown(page); if (s.step !== 12 || s.result) break; await page.keyboard.press('F10'); await page.waitForTimeout(150); }
+  });
+  await checkStep(page, 13); await next(page);
+  await checkStep(page, 14);
+  expect((await shown(page)).targets.length, 'the gutter cell and its line: one ring').toBe(1);
+  await practice(14, async () => { const t = (await shown(page)).targets[0]; await page.mouse.click(t.left + 9, middle(t)[1]); }); // its gutter end
+  await practice(15, () => page.keyboard.press('F5'));
+  await practice(16, async () => {
+    const radio = page.getByRole('radio', { name: '1 line/s' });
+    if (await radio.isVisible()) await radio.click(); else await page.locator('.speedone').click();
+    await page.keyboard.press('F5');
+    await expect(page.locator('.status')).toContainText('천천히 실행 중');
+    await page.waitForTimeout(1500);
+    await page.keyboard.press('Escape');
+  });
+  await practice(17, () => page.locator('[data-tut="reset"]').click());
+  await practice(18, async () => {
+    for (let i = 0; i < 3; i += 1) { const s = await shown(page); if (s.step !== 18 || s.result) break; await page.keyboard.press('F5'); await page.waitForTimeout(600); }
+  });
+  await practice(19, () => page.keyboard.press('Control+s'));
+  await practice(19, () => page.locator('.asm').getByRole('button', { name: /행으로 가기/ }).click(), 1);
+  // Step 20: the Editor at the line to fix -- the cursor on it, the line marked, the card saying so.
+  await checkStep(page, 20);
+  await expect(page.locator('.tut-card h3')).toHaveText('여기가 고칠 줄입니다');
+  const at = await page.evaluate(() => {
+    const lines = [...document.querySelectorAll('.cm-content .cm-line')];
+    const marked = document.querySelector('.cm-line.cm-error-line');
+    const sel = window.getSelection();
+    const cursorLine = sel?.anchorNode ? lines.findIndex((l) => l.contains(sel.anchorNode)) + 1 : 0;
+    return { marked: marked ? lines.indexOf(marked) + 1 : 0, cursorLine, focused: document.activeElement?.closest('.cm-editor') !== null };
+  });
+  expect(at, 'the cursor on the marked line, in the Editor').toEqual({ marked: 4, cursorLine: 4, focused: true });
+  const lineBox = (await page.locator('.cm-line.cm-error-line').boundingBox())!;
+  expect(Math.abs((await shown(page)).targets[0].top - lineBox.y) < 3, 'the step points at that line').toBe(true);
+  await next(page);
+  await checkStep(page, 21);
+  // The end on the example, whole: not on step 19's errors.
+  await expect(page.locator('.titlebar .file')).toContainText('tutorial.s');
+  await expect(page.locator('.titlebar .file')).not.toContainText('error');
+  await expect(page.locator('.asm .item')).toHaveCount(0);
+  await expect(page.locator('.cm-error-mark')).toHaveCount(0);
+  await page.locator('.tut-card .tut-finish').click();
+  await expect.poll(() => active(page)).toBe(false);
+}
+
+const SIZES = [
+  { name: '1280x800', width: 1280, height: 800 },
+  { name: 'a lab PC (1093x582)', width: 1093, height: 582 },
+  { name: '1024x728', width: 1024, height: 728 },
+  { name: 'the narrow window (910x505)', width: 910, height: 505 },
+];
+
+for (const size of SIZES) {
+  test(`${size.name}: twenty-one steps, done for real; every target on screen, none under the card, the card next to it`, async () => {
+    test.setTimeout(180_000);
+    const before = [hash('tutorial.s'), hash('tutorial-error.s')];
+    const r = await launch(size);
+    try {
+      await r.page.getByRole('button', { name: /튜토리얼 보기/ }).click();
+      await walk(r.page, 'do');
+      // Back where it started: the first screen, nothing open.
+      await expect(r.page.locator('.wcard')).toBeVisible();
+      await expect(r.page.locator('.tut')).toHaveCount(0);
+      expect([hash('tutorial.s'), hash('tutorial-error.s')]).toEqual(before);
+    } finally {
+      await r.close();
+    }
+  });
+}
+
+test.describe(() => {
+  let r: Running;
+  test.beforeEach(async () => { r = await launch({ width: 1093, height: 582 }); });
+  test.afterEach(async () => { await r.close(); });
+
+  test('every practice step can be skipped, and the steps after it still have what they point at', async () => {
+    test.setTimeout(180_000);
+    await r.page.getByRole('button', { name: /튜토리얼 보기/ }).click();
+    await walk(r.page, 'skip');
+  });
+
+  test('step 16: stopping the tutorial while the slow run goes', async () => {
+    test.setTimeout(120_000);
+    const { page } = r;
+    await page.getByRole('button', { name: /튜토리얼 보기/ }).click();
+    await page.evaluate(() => (window as unknown as { __tutorial: { go(i: number): Promise<void> } }).__tutorial.go(15));
+    await checkStep(page, 16);
+    await page.getByRole('radio', { name: '1 line/s' }).click();
+    await page.keyboard.press('F5');
+    await expect(page.locator('.status')).toContainText('천천히 실행 중');
+    await page.locator('.tut-card .tut-quit').click();
+    await page.locator('dialog.ask').getByRole('button', { name: '그만두기' }).click();
+    await expect.poll(() => active(page)).toBe(false);
+    await expect(page.locator('.status')).not.toContainText('실행 중');
+    await expect(page.locator('.wcard')).toBeVisible();
+    // Within this run: asked whether to go on from step 16.
+    await page.getByRole('button', { name: /튜토리얼 보기/ }).click();
+    await expect(page.locator('dialog.ask')).toContainText('16단계');
+    await page.locator('dialog.ask').getByRole('button', { name: /이어서/ }).click();
+    await atStep(page, 16);
+  });
+
+  test('a column the width took away is turned on for the step that points at it, and let go at the end', async () => {
+    const { page } = r;
+    await resize(r, { width: 1024, height: 728 });
+    for (let i = 0; i < 4; i += 1) await page.keyboard.press('Control+='); // a big font: Text gives up Encoding
+    await page.getByRole('button', { name: /튜토리얼 보기/ }).click();
+    await page.evaluate(() => (window as unknown as { __tutorial: { go(i: number): Promise<void> } }).__tutorial.go(8));
+    await checkStep(page, 9);
+    expect((await shown(page)).did).toContain('column word on');
+    await expect(page.locator('.theader .word')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.locator('dialog.ask').getByRole('button', { name: '그만두기' }).click();
+    await expect.poll(() => active(page)).toBe(false);
+    // Let go: the next program's Text is as the width makes it.
+    await openAndAssemble(r, sample(r.dir, 'tests/samples/lab04-ok.s'));
+    await expect(page.locator('.theader .word')).toBeHidden();
+    await expect(page.locator('.textpanel .paside')).toContainText('+ Encoding');
+  });
+
+  test('keys a step does not ask for do nothing; Esc asks before stopping; → and ← step through', async () => {
+    const { page } = r;
+    await page.getByRole('button', { name: /튜토리얼 보기/ }).click();
+    await atStep(page, 1);
+    await page.keyboard.press('F5'); // not asked for: nothing assembles, nothing runs
+    await page.keyboard.press('F10');
+    await page.waitForTimeout(300);
+    await expect(page.locator('.run-placeholder')).toBeVisible();
+    await page.keyboard.press('ArrowRight');
+    await atStep(page, 2);
+    await page.keyboard.press('ArrowRight'); // a practice step: → waits for the student
+    await page.waitForTimeout(300);
+    expect((await shown(page)).step).toBe(2);
+    await page.keyboard.press('ArrowLeft');
+    await atStep(page, 1);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('dialog.ask')).toContainText('튜토리얼을 그만둘까요?');
+    await page.locator('dialog.ask').getByRole('button', { name: '계속하기' }).click();
+    expect(await active(page)).toBe(true);
+    // The example is read-only.
+    const text = await page.locator('.cm-content').innerText();
+    const [x, y] = middle((await shown(page)).targets[0]);
+    await page.mouse.click(x, y + 20); // in the lines step 1 points at
+    await page.keyboard.type('xyz');
+    expect(await page.locator('.cm-content').innerText()).toBe(text);
+    await expect(page.locator('.titlebar .dirty')).toHaveCount(0);
+  });
+
+  test('a student\'s file with unsaved changes: asked first, and back as it was after the tutorial', async () => {
+    const { page } = r;
+    await page.getByRole('button', { name: /바로 시작/ }).click();
+    await page.getByRole('button', { name: /새 파일/ }).first().click();
+    await page.locator('.cm-content').click();
+    await page.keyboard.insertText('main:\n    li $t0, 1\n');
+    await page.getByTitle('Tutorial').click();
+    const ask = page.locator('dialog.ask');
+    await expect(ask).toContainText('저장하지 않은 변경이 있습니다');
+    await ask.getByRole('button', { name: '튜토리얼 시작' }).click();
+    await atStep(page, 1);
+    await expect(page.locator('.titlebar .file')).toContainText('tutorial.s');
+    await page.keyboard.press('Escape');
+    await page.locator('dialog.ask').getByRole('button', { name: '그만두기' }).click();
+    await expect.poll(() => active(page)).toBe(false);
+    await expect(page.locator('.titlebar .file')).toContainText('untitled.s');
+    await expect(page.locator('.titlebar .dirty')).toHaveCount(1);
+    expect(await page.locator('.cm-content').innerText()).toContain('li $t0, 1');
+  });
+});
+
+test('a new start of the program: step 1, not asked to go on', async () => {
+  const userData = path.join((await import('node:os')).tmpdir(), `spim-tut-${process.pid}`);
+  const first = await launch({ width: 1093, height: 582 }, { userData });
+  await first.page.getByRole('button', { name: /튜토리얼 보기/ }).click();
+  await atStep(first.page, 1);
+  await first.page.keyboard.press('ArrowRight');
+  await atStep(first.page, 2);
+  await first.close();
+  const again = await launch({ width: 1093, height: 582 }, { userData });
+  try {
+    await again.page.getByRole('button', { name: /튜토리얼 보기/ }).click();
+    await expect(again.page.locator('dialog.ask')).toHaveCount(0);
+    await atStep(again.page, 1);
+  } finally {
+    await again.close();
+  }
+});

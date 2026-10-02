@@ -9,9 +9,11 @@ let r: Running;
 test.beforeEach(async () => { r = await launch(); });
 test.afterEach(async () => { await r.close(); });
 
-test('new file -> paste -> Ctrl+S -> errors -> fix -> Ctrl+S -> Text', async () => {
+test('first screen -> new file -> paste -> Ctrl+S -> errors -> fix -> Ctrl+S -> Text', async () => {
   const { app, page } = r;
-  // (No first screen in this edition: the app opens on an untitled file.)
+  await expect(page.locator('.wcard h1')).toHaveText('안녕하세요!');
+  await page.getByRole('button', { name: /바로 시작/ }).click();
+  await page.getByRole('button', { name: /새 파일/ }).first().click();
   await expect(page.locator('.editor-panel')).toBeVisible();
 
   const source = 'main:\n  li   t0, 5\n  srll t1, t0, 1\n  li   a7, 10\n  ecall\n';
@@ -100,7 +102,9 @@ test('breakpoint -> F5 stops there -> F5 goes on to the end', async () => {
   await settled(page);
   expect(await statusText(page)).toContain('프로그램이 끝났습니다');
   expect(await regHex(page, 'x7')).toBe('0x00000003');
-  // (No "first run" card with a character in this edition.)
+  // The first run that ends well, once a session.
+  await expect(page.locator('.congrats')).toBeVisible();
+  await page.locator('.congrats').getByRole('button', { name: 'Close' }).click();
   await page.getByRole('button', { name: /Reset/ }).click();
   // Keys wait while Reset builds the new machine: wait for it to be ready.
   await expect(page.locator('.status')).toContainText('Step · ');
@@ -109,6 +113,7 @@ test('breakpoint -> F5 stops there -> F5 goes on to the end', async () => {
   await expect(page.locator('.status')).toContainText('브레이크포인트'); // the new machine has it too
   await page.keyboard.press('F5');
   await expect(page.locator('.status')).toContainText('프로그램이 끝났습니다');
+  await expect(page.locator('.congrats')).toBeHidden();
 });
 
 test('an endless loop: F5, stop, the registers are there to read', async () => {

@@ -186,6 +186,14 @@ test.describe(() => {
   test.beforeEach(async () => { r = await launch(); });
   test.afterEach(async () => { await r.close(); });
 
+  test('the first screen has no toolbar; a file brings it', async () => {
+    const { page } = r;
+    await expect(page.locator('.toolbar')).toBeHidden();
+    await page.getByRole('button', { name: /바로 시작/ }).click();
+    await page.getByRole('button', { name: /새 파일/ }).first().click();
+    await expect(page.locator('.toolbar')).toBeVisible();
+  });
+
   test('a column the width takes away comes back from the head, and goes again', async () => {
     const { page } = r;
     await lab04(r, 2);
@@ -248,7 +256,7 @@ test.describe(() => {
     await expect(page.locator('.run-side .asm')).toHaveCount(0);
     await expect(page.locator('.run-placeholder')).toHaveAttribute('data-kind', 'failed'); // nothing assembled yet
     await side(page, 'Run'); // (a narrow window: the card is on the Run tab)
-    expect(await page.locator('img.char').evaluateAll((els) => els.filter((e) => e.checkVisibility()).length)).toBe(0); // no character in this edition
+    expect(await page.locator('img.char').evaluateAll((els) => els.filter((e) => e.checkVisibility()).length)).toBe(1);
     await side(page, 'Editor');
 
     await resize(r, { width: 910, height: 505 });

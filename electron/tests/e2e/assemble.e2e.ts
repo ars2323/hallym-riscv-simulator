@@ -71,6 +71,8 @@ test('a new file: Save & Assemble asks where to save it; cancelled, it assembles
   const r = await launch({ width: 1280, height: 800 });
   const { page } = r;
   try {
+    await page.getByRole('button', { name: /바로 시작/ }).click();
+    await page.getByRole('button', { name: /새 파일/ }).first().click();
     await page.waitForSelector('.editor-panel .cm-content');
     await expect(page.locator('.titlebar .file')).toHaveAttribute('title', 'untitled.s');
     expect(await shownName(page)).toBe('Save & Assemble');

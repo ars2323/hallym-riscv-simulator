@@ -42,8 +42,7 @@ export async function launch(size: { width: number; height: number } = defaultSi
   const page = await app.firstWindow();
   const pageErrors: string[] = [];
   page.on('pageerror', (e) => pageErrors.push(e.message));
-  // No first screen in this edition: the app opens straight into the Editor.
-  await page.waitForSelector('.editor-panel .cm-content');
+  await page.waitForSelector('.wcard');
   if (!options.keepSize) await resize({ app, page }, size); // keepSize: the window as the app opened it
   return {
     app, page, dir,
@@ -84,6 +83,13 @@ export function sample(dir: string, from: string, name = path.basename(from)): s
   const target = path.join(dir, name);
   copyFileSync(path.join(root, from), target);
   return target;
+}
+
+// From the first screen to an empty untitled file: 바로 시작, 새 파일.
+export async function newFile(page: Page): Promise<void> {
+  await page.getByRole('button', { name: /바로 시작/ }).click();
+  await page.getByRole('button', { name: /새 파일/ }).first().click();
+  await page.waitForSelector('.editor-panel .cm-content');
 }
 
 // Opens `file` through the open dialog (Ctrl+O), without assembling it.

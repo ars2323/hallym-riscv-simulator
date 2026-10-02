@@ -79,6 +79,8 @@ const cursor = () => r.page.evaluate(() => {
 
 async function newFileWith(text: string): Promise<CDPSession> {
   const { page } = r;
+  await page.getByRole('button', { name: /바로 시작/ }).click();
+  await page.getByRole('button', { name: /새 파일/ }).first().click();
   await page.locator('.cm-content').click();
   await page.keyboard.insertText(text);
   return ime(page);

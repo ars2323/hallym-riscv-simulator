@@ -33,6 +33,9 @@ export function codeText(text: string): DocumentFragment {
 
 export const asset = (p: string): string => `../assets/${p}`;
 export const icon = (name: string): HTMLImageElement => h('img', { class: 'icon', src: asset(`icons/lucide/${name}.svg`), alt: '' });
+// Hallym characters: the original PNGs, scaled by CSS only, never under 76 px.
+export const character = (name: string, height: number): HTMLImageElement =>
+  h('img', { class: 'char', src: asset(`hallym/characters/${name}.png`), alt: '', style: `height:${Math.max(76, height)}px` });
 
 // Prose from the core (error messages): the parts that look like numbers
 // in hexadecimal go in the mono font.

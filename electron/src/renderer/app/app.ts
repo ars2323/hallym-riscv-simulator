@@ -2,8 +2,8 @@
 
      title bar   logo, name, file, the toolbar; the system's own caption
                  buttons on the right (titleBarOverlay, src/main/main.ts)
-     work        Editor | Run side by side (the app opens straight into an
-                 empty Editor): a splitter between them, either side can be folded;
+     work        the first screen (welcome.ts), then Editor | Run side by
+                 side: a splitter between them, either side can be folded;
                  under the Editor the Assemble panel (what the last assemble
                  did: its time and what it made, or its errors)
      status bar
@@ -22,8 +22,8 @@
    (it cannot start).  The status bar says which; a dead engine says why on
    the Run side instead of the machine.
 
-   (The MIPS edition's app.ts.  Not here: the first screen, the tutorial,
-   the .hmx export, Advanced settings -- docs in the RISC-V round's report.)  While the Editor holds the program in the machine, it
+   (The MIPS edition's app.ts.  Not here: the .hmx export and the Advanced
+   settings, which were SPIM's.)  While the Editor holds the program in the machine, it
    marks the line being executed (the Text panel's line column: the core's
    own PC -> source mapping); once the code has changed it marks none (its
    lines are no longer the program's), and Text alone shows where PC is.
@@ -44,13 +44,14 @@
 
 import { hex32 } from '../../core/format.ts';
 import { LabelMap } from '../../core/symbols.ts';
-import { abiName, FP_ABI_NAMES } from '../../core/registers.ts';
+import { nearMiss } from '../../core/near-miss.ts';
+import { abiName, findRegister, FP_ABI_NAMES } from '../../core/registers.ts';
 import type { Settings } from '../../main/main.ts';
 import type { TextFileFormat } from '../../node/text-file.ts';
 import type { EngineState } from '../../sim/host.ts';
 import type { ErrorItem, RunReply } from '../../sim/protocol.ts';
 import './api.ts';
-import { code, codeText, h, icon, monoCh, withHex } from './dom.ts';
+import { asset, character, code, codeText, h, icon, monoCh, withHex } from './dom.ts';
 import { captionPatch, WHITE_PATCH } from './logic/overlay.ts';
 import { notice } from './notice.ts';
 import { createEditor } from './editor.ts';
@@ -62,7 +63,9 @@ import { Inspector } from './panels/inspector.ts';
 import { RegisterPanel } from './panels/registers.ts';
 import { settingsDialog } from './panels/settings.ts';
 import { TextPanel } from './panels/text.ts';
+import { welcome } from './panels/welcome.ts';
 import { ask } from './panels/ask.ts';
+import { Tutorial, type Example, type Signal } from './tutorial.ts';
 import type { DataSection } from './panels/data.ts';
 import { panelHead } from './ui.ts';
 
@@ -76,8 +79,9 @@ const NARROW_PX = 980;
 
 // ---- state ------------------------------------------------------------------
 
-let open = true;                       // a document is open (always: the app opens straight into an untitled file)
-let file: { name: string; path: string | null; format: TextFileFormat | null } = { name: UNTITLED, path: null, format: null };
+let open = false;                      // a document is open (past the first screen)
+// `example`: one of the tutorial's, read-only, never saved.
+let file: { name: string; path: string | null; format: TextFileFormat | null; example?: Example } = { name: UNTITLED, path: null, format: null };
 let dirty = false;  // changes not saved (the title bar's dot)
 let edited = false; // the Editor's text is not the program in the machine (the band, no PC line)
 let settings: Settings = { fontSize: 13, dataBase: 16 };
@@ -101,6 +105,7 @@ const breakpoints = new Set<number>();
 let sentLines = '';                     // the lines the engine last got (JSON)
 const labels = new LabelMap();          // the program's, for Data
 let resumeWith: 'run' | 'step' = 'run';
+let congratsShown = false;             // once a session
 let errors: { message: string; line: number; col: number }[] = [];
 let saveNote = '';     // what Ctrl+S did with the file: shown until the first step
 let saveWarn = false;  // ...and whether it is a warning (not saved)
@@ -162,16 +167,26 @@ viewEditor.addEventListener('click', () => showView('editor'));
 viewRun.addEventListener('click', () => showView('run'));
 const viewSwitch = h('span', { class: 'seg viewswitch', role: 'tablist', hidden: true }, viewEditor, viewRun);
 const titlebar = h('header', { class: 'titlebar' },
-  h('span', { class: 'brand' }, h('span', { class: 'appname' }, APP_NAME)),
+  h('span', { class: 'brand' },
+    h('img', { class: 'logo', src: asset('hallym/marks/symbol-basic.svg'), alt: '' }),
+    h('span', { class: 'appname' }, APP_NAME)),
   fileLabel,
   toolbar,
   viewSwitch,
   h('span', { class: 'drag' }),
   h('span', { class: 'tools' },
+    iconButton('Tutorial', 'circle-question-mark', () => void startTutorial()),
     iconButton('New file', 'file-plus', () => void newFile()),
     iconButton('Open file (Ctrl+O)', 'folder-open', () => void openFile()),
     bSettings));
 const status = h('footer', { class: 'status' });
+
+// ---- the first screen ------------------------------------------------------------
+
+const firstScreen = welcome({
+  tutorial: () => void startTutorial(), newFile: () => void newFile(), openFile: () => void openFile(),
+});
+const stageWelcome = h('div', { class: 'stage-welcome' }, firstScreen.root);
 
 // ---- the Editor side -------------------------------------------------------------------
 
@@ -193,14 +208,15 @@ const text = new TextPanel({
   select: (addr) => select(addr),
   toggleBreakpoint: (addr) => void toggleBreakpoint(addr),
 });
-text.onTab = (tab) => { if (tab === 'data') void refreshData(); };
+text.onTab = (tab) => { if (tab === 'data') void refreshData(); emit({ kind: 'tab', tab }); };
 const inspector = new Inspector();
 const consolePanel = new ConsolePanel();
 consolePanel.onInput = (line) => void giveInput(line);
 consolePanel.onToggle = () => layout();
+const congrats = h('div', { class: 'congrats', hidden: true });
 const regsHost = h('div', { class: 'regshost' });
 let registers: RegisterPanel | null = null;
-const centre = h('div', { class: 'centre' }, text.root, inspector.root);
+const centre = h('div', { class: 'centre' }, text.root, inspector.root, congrats);
 // Registers over the Console on the left, Text/Data over the Inspector on
 // the right: both of those get the whole height (a lab PC has ~480 px).
 // Between Registers and the Console, a grip: drag to share the height,
@@ -236,7 +252,7 @@ const asmGrip = h('div', { class: 'vgrip', role: 'separator', 'aria-orientation'
 const paneEditor = h('div', { class: 'pane pane-editor' }, editorPanel, asmGrip, asmPanel, railEditor);
 const paneRun = h('div', { class: 'pane pane-run' }, runPanel, railRun);
 const split = h('div', { class: 'split' }, paneEditor, splitter, paneRun);
-const work = h('main', { class: 'work' }, split);
+const work = h('main', { class: 'work' }, stageWelcome, split);
 
 document.body.append(h('div', { class: 'app' }, titlebar, work, status));
 
@@ -333,6 +349,9 @@ const editorLeast = (): number => {
 const asmRoom = (): number => Math.max(ASM_LEAST, paneEditor.clientHeight - editorLeast() - 8);
 
 function layout(): void {
+  stageWelcome.hidden = open;
+  document.body.classList.toggle('first-screen', !open); // its bars over the photo (app.css), the caption patch (updateOverlay)
+  firstScreen.show(!open); // the video plays on the first screen only
   split.hidden = !open;
   viewSwitch.hidden = !open || !narrow;
   split.classList.toggle('narrow', narrow);
@@ -405,7 +424,8 @@ function renderPlaceholder(): void {
   placeholder.dataset.key = key;
   const go = h('button', { class: 'btn primary', type: 'button' }, icon('hammer'), h('span', {}, assembleName(false)), h('kbd', {}, 'Ctrl+S'));
   go.addEventListener('click', () => void saveAndAssemble());
-  placeholder.replaceChildren(notice({ title, body, more: kind === 'dead' ? [] : [h('div', { class: 'row' }, go)] }));
+  // The words first, then Haram at the far end from the Editor they are about.
+  placeholder.replaceChildren(notice({ pose: 'guide', title, body, more: kind === 'dead' ? [] : [h('div', { class: 'row' }, go)] }));
   placeholder.dataset.kind = kind;
 }
 
@@ -544,7 +564,7 @@ function showFileName(cols: number): void {
 // Assemble for the tutorial's examples, which are never saved (the status
 // bar says so), and in a title bar too narrow for the long name (the
 // "short" step below; the tooltip still says Save & Assemble).
-const saves = (): boolean => true;
+const saves = (): boolean => !file.example;
 const assembleName = (short: boolean): string => (saves() && !short ? 'Save & Assemble' : 'Assemble');
 function nameAssemble(): void {
   (bAssemble.querySelector('.label') as HTMLElement).textContent = assembleName(titlebar.classList.contains('short'));
@@ -679,12 +699,13 @@ async function mayReplace(what: 'new' | 'open'): Promise<boolean> {
   return true;
 }
 
-async function load(opened: { name: string; path: string | null; text: string; format: TextFileFormat } | null): Promise<void> {
+async function load(opened: { name: string; path: string | null; text: string; format: TextFileFormat } | null, example?: Example): Promise<void> {
   if (!opened) return;
   await forgetMachine();
-  file = { name: opened.name, path: opened.path, format: opened.format };
+  file = { name: opened.name, path: opened.path, format: opened.format, example };
   editor.setReadOnly(false);
   editor.setText(opened.text);
+  editor.setReadOnly(example !== undefined);
   dirty = false;
   edited = false;
   errors = [];
@@ -707,14 +728,116 @@ async function openFile(): Promise<void> {
   if (!(await mayReplace('open'))) return;
   await load(await api.openFile().catch((e: Error) => { [saveNote, saveWarn] = [e.message, true]; renderChrome(); return null; }));
 }
-// Something happened the tests (or a later tutorial) may wait for.
-type Signal = { kind: 'assembled'; ok: boolean } | { kind: 'stopped'; reason: StopReason } | { kind: 'reset' } | { kind: 'slow-ended' };
+// ---- the tutorial ----------------------------------------------------------------------
+
+// What was on screen before the tutorial, put back when it ends (unsaved
+// changes too: nothing of the student's is lost or written).
+let beforeTutorial: { file: typeof file; text: string; dirty: boolean; breakpoints: number[] } | null = null;
+
+async function startTutorial(): Promise<void> {
+  if (tutorial.active || busy) return;
+  if (open && dirty && !file.example) {
+    const go = await ask({
+      title: '저장하지 않은 변경이 있습니다', file: file.name,
+      body: '튜토리얼을 하는 동안 이 파일은 잠시 내려갑니다. 끝나면 바뀐 내용 그대로 돌아옵니다. 먼저 저장하려면 돌아가서 Ctrl+S 키를 누르세요.',
+      ok: '튜토리얼 시작', cancel: '돌아가기',
+    });
+    if (!go) return;
+  }
+  beforeTutorial = open && !file.example
+    ? { file: { ...file }, text: editor.text(), dirty, breakpoints: editor.breakpointLines() } : null;
+  await tutorial.start();
+}
+
+// The first address of a source line in the program on screen (Text's rows), or null.
+function addressOfLine(line: number): number | null {
+  return rows.find((r) => r.line === line)?.addr ?? null;
+}
+
 const listeners: ((s: Signal) => void)[] = [];
 function emit(s: Signal): void { for (const l of listeners) l(s); }
 
 async function waitWhileRunning(): Promise<void> {
   for (let i = 0; i < 200 && runState === 'running'; i += 1) await new Promise((r) => setTimeout(r, 20));
 }
+
+const tutorial = new Tutorial({
+  narrow: () => narrow,
+  view: () => view,
+  showView: (v) => showView(v),
+  open: async (name) => { await load(await api.openExample(name), name); },
+  example: () => file.example ?? null,
+  source: () => editor.text(),
+  assembled: () => current(),
+  assemble: () => saveAndAssemble(),
+  step: () => step(),
+  runUntil: async (addr) => {
+    if (!current() && !(await saveAndAssemble())) return;
+    for (let i = 0; i < 500 && lastRegs && lastRegs.pc !== addr && runState !== 'finished' && runState !== 'input'; i += 1) {
+      resumeWith = 'step';
+      await go(() => api.call('step', {}));
+    }
+  },
+  run: async () => { await run(); await waitWhileRunning(); },
+  stop: async () => { await stop(); await waitWhileRunning(); },
+  restart: () => restart(),
+  setSpeed: (sp) => setSpeed(sp),
+  pc: () => lastRegs?.pc ?? null,
+  running: () => runState === 'running',
+  finished: () => runState === 'finished',
+  addressOfLine: (line) => addressOfLine(line),
+  labelAddress: (name) => labels.find(name) ?? null,
+  quietPc: (on) => text.root.classList.toggle('quiet-pc', on),
+  pin: (addr) => { if (addr === null) { if (selected >= 0) { clearSelection(); renderStatus(); } } else select(addr); },
+  setTab: (t) => text.setTab(t),
+  tab: () => text.tab,
+  breakpointLines: () => editor.breakpointLines(),
+  setBreakpointLine: async (line, on) => {
+    const lines = new Set(editor.breakpointLines());
+    if (on) lines.add(line); else lines.delete(line);
+    editor.setBreakpointLines([...lines]);
+    await editorBreakpoint(line, on);
+  },
+  goToLine: (n) => goToErrorLine(n),
+  errorLine: () => errors.find((e) => e.line > 0)?.line ?? null,
+  expandConsole: () => {
+    const was = consolePanel.expanded;
+    consolePanel.setExpanded(true);
+    layout();
+    return !was;
+  },
+  revealLine: (n) => editor.revealLine(n),
+  lineRect: (n) => editor.lineRect(n),
+  gutterRect: (n) => editor.gutterRect(n),
+  revealRegister: (key) => registers?.revealRegister(key),
+  revealAddr: (addr) => text.revealAddr(addr),
+  showColumn: (panel, key) => (panel === 'regs' ? registers?.showColumn(key as 'dec' | 'bin') ?? 'already' : text.showColumn(key as 'word')),
+  releaseColumn: (panel, key) => { if (panel === 'regs') registers?.releaseColumn(key as 'dec' | 'bin'); else text.releaseColumn(key as 'word'); },
+  on: (l) => { listeners.push(l); },
+  close: async () => {
+    await forgetMachine();
+    const back = beforeTutorial;
+    beforeTutorial = null;
+    if (back) {
+      await load({ name: back.file.name, path: back.file.path, text: back.text, format: back.file.format ?? { encoding: 'UTF-8', byteOrderMark: false, lineEnd: 'LF' } });
+      file.format = back.file.format;
+      editor.setBreakpointLines(back.breakpoints);
+      dirty = back.dirty;
+      edited = back.dirty;
+    } else {
+      open = false;
+      file = { name: UNTITLED, path: null, format: null };
+      editor.setReadOnly(false);
+      editor.setText('');
+      dirty = false;
+      edited = false;
+      errors = [];
+      renderErrors();
+    }
+    renderChrome();
+  },
+});
+(window as unknown as { __tutorial: Tutorial }).__tutorial = tutorial; // for the tests
 
 // The machine no longer matches what is on screen: a new file.
 async function forgetMachine(): Promise<void> {
@@ -786,6 +909,7 @@ async function assemble(source: string): Promise<boolean> {
   let after: Signal | null = null;
   note = '';
   exportNote = '';
+  congrats.hidden = true;
   const failed = (list: typeof errors): false => {
     errors = list;
     edited = editor.text() !== assembledText;
@@ -855,6 +979,7 @@ async function assemble(source: string): Promise<boolean> {
 function goToErrorLine(n: number): void {
   if (narrow) showView('editor');
   editor.goToLine(n);
+  emit({ kind: 'goto', line: n });
 }
 
 // The errors of the last assemble: marked in the Editor's margin, listed in
@@ -863,6 +988,28 @@ function renderErrors(): void {
   editor.showErrors(errors.map((e) => e.line).filter((n) => n > 0));
   asmKey = '';
   renderAssemble();
+}
+
+// The slip a line shows, when there is one to name (src/core/near-miss.ts),
+// under RARS's words: a name a letter or two from one RARS knows, a register
+// that does not exist, a MIPS habit.  RARS names the word it could not take
+// ('"spp": operand is of incorrect type'); only that word is guessed at as a
+// misspelt register.  Nothing to name: no hint.
+function hintFor(message: string, source: string): string {
+  const flagged = /^"([^"]+)"/.exec(message)?.[1] ?? null;
+  const near = nearMiss(source, flagged);
+  if (near?.why === 'spelling') {
+    const noSuch = { directive: '지시어는 없습니다', instruction: '명령은 없습니다', register: '레지스터는 없습니다' }[near.kind];
+    return `\`${near.token}\` ${noSuch}. 혹시 \`${near.meant}\`?`;
+  }
+  if (near?.why === 'no-such-register') return `\`${near.token}\` 레지스터는 없습니다. \`${near.family}\` 레지스터는 \`${near.range}\` 입니다.`;
+  if (near?.why === 'mips' && near.token.startsWith('$')) {
+    return findRegister(near.meant)
+      ? `RISC-V 레지스터 이름에는 \`$\` 기호가 없습니다: \`${near.token}\` → \`${near.meant}\`.`
+      : `RISC-V 레지스터 이름에는 \`$\` 기호가 없고, \`${near.meant}\` 레지스터도 없습니다(MIPS 레지스터 이름). 시스템 호출 번호는 \`a7\` 레지스터에 넣습니다.`;
+  }
+  if (near?.why === 'mips') return `\`${near.token}\` 명령은 MIPS 명령입니다. RISC-V 에서는 \`${near.meant}\` 명령을 씁니다.`;
+  return '';
 }
 
 function errorNotice(): HTMLElement {
@@ -875,14 +1022,16 @@ function errorNotice(): HTMLElement {
     const where = h('button', { class: 'linkbtn line', type: 'button', disabled: !e.line }, e.line ? `${e.line}행` : '');
     where.addEventListener('click', () => { if (e.line) toLine(e.line); });
     const source = e.line > 0 && e.line <= editor.view.state.doc.lines ? editor.view.state.doc.line(e.line).text.trim() : '';
+    const hint = source ? hintFor(e.message, source) : '';
     return h('div', { class: 'item' }, h('span', { class: 'mark', 'aria-hidden': 'true' }, '!'), where,
-      h('span', { class: 'msg' }, h('span', { class: 'what' }, withHex(e.message)), source ? code(source, 'src') : null));
+      h('span', { class: 'msg' }, h('span', { class: 'what' }, withHex(e.message)), source ? code(source, 'src') : null,
+        hint ? h('span', { class: 'hint' }, codeText(hint)) : null));
   });
   const title = errors.length > 1 ? `코드에 오류가 ${errors.length}개 있습니다` : '코드에 오류가 있습니다';
   const todo = (errors.length > 1 ? '위에서부터 하나씩 고친 뒤 Ctrl+S 키를 다시 누르세요.' : '아래 줄을 고친 뒤 Ctrl+S 키를 다시 누르세요.')
     + (machineShown() ? ` ${narrow ? 'Run 탭' : '오른쪽'}에는 마지막으로 어셈블한 코드가 그대로 있습니다.` : '');
   return h('div', { class: 'notice-host' },
-    notice({ title, body: todo, more: [h('div', { class: 'items' }, ...items), h('div', { class: 'row' }, go)] }));
+    notice({ pose: 'curious', title, body: todo, more: [h('div', { class: 'items' }, ...items), h('div', { class: 'row' }, go)] }));
 }
 
 // ---- running ----------------------------------------------------------------------------
@@ -931,6 +1080,7 @@ async function go(call: () => Promise<RunReply>): Promise<RunReply | null> {
   busy = true;
   note = '';
   exportNote = '';
+  congrats.hidden = true;
   const before = lastRegs;
   let result: RunReply;
   try {
@@ -962,6 +1112,7 @@ async function go(call: () => Promise<RunReply>): Promise<RunReply | null> {
       : '입력을 기다리다 멈췄는데 되돌리지 못했습니다 — 다시 어셈블하세요 (Ctrl+S)';
     consolePanel.waitForInput(false);
     if (text.tab === 'data') void refreshData();
+    if (reason === 'exit' && !congratsShown && !tutorial.active) showCongrats();
     return result;
   } finally {
     busy = false;
@@ -1046,6 +1197,7 @@ async function restart(): Promise<void> {
   busy = true;
   note = '';
   exportNote = '';
+  congrats.hidden = true;
   [saveNote, saveWarn] = ['', false]; // Reset saves nothing
   try {
     if (runState === 'running' || runState === 'input') { slow?.cancel(); await api.stop().catch(() => {}); await waitWhileRunning(); }
@@ -1111,7 +1263,8 @@ async function toggleBreakpoint(addr: number): Promise<void> {
 
 // A breakpoint set or cleared in the Editor's gutter.  The engine gets the
 // lines at once; with changed code they apply from the next assemble.
-async function editorBreakpoint(_line: number, _on: boolean): Promise<void> {
+async function editorBreakpoint(line: number, on: boolean): Promise<void> {
+  emit({ kind: 'breakpoint', line, on });
   note = '';
   if (!current()) {
     // Changed code: its lines are not the program's; they go to the engine with the next assemble.
@@ -1186,10 +1339,23 @@ async function refreshData(): Promise<void> {
   text.data.show(sections, settings.dataBase, labels, pointers);
 }
 
+// ---- first successful run -------------------------------------------------------------------
+
+function showCongrats(): void {
+  congratsShown = true;
+  const close = h('button', { class: 'btn small', type: 'button' }, 'Close');
+  close.addEventListener('click', () => { congrats.hidden = true; });
+  congrats.replaceChildren(character('congrats', 120),
+    h('div', { class: 'say' }, h('h3', {}, '첫 실행 성공!'), h('p', {}, '프로그램이 끝까지 실행되었습니다.'), close));
+  congrats.hidden = false;
+}
+
 // ---- the caption buttons' patch -----------------------------------------------------------
 // Windows draws the minimise / maximise / close buttons on a patch the page
-// cannot paint (titleBarOverlay).  While a dialog's backdrop covers the
-// window (no first screen and no tutorial in this edition), the patch takes the colour white has under the same layers
+// cannot paint (titleBarOverlay).  On the first screen, whose title bar is
+// dark glass over the photo, the patch is transparent and the symbols white.
+// Elsewhere, while the tutorial dims the window, or a dialog's backdrop
+// covers it, the patch takes the colour white has under the same layers
 // (logic/overlay.ts), or it would stay a bright square at the top right;
 // white again after.  The buttons keep working throughout.
 let overlayNow = `${WHITE_PATCH.color} ${WHITE_PATCH.symbolColor}`; // the window's own at its start (src/main/main.ts)
@@ -1206,6 +1372,7 @@ updateOverlay(); // the first screen is up before anything is watched
 // ---- keys -----------------------------------------------------------------------------------
 
 window.addEventListener('keydown', (e) => {
+  if (tutorial.handleKey(e)) return;
   if (document.querySelector('dialog[open]')) return; // the dialog has the keys (Esc closes it)
   const mod = e.ctrlKey || e.metaKey;
   const inEditor = editorHost.contains(e.target as Node);
@@ -1270,6 +1437,5 @@ async function start(): Promise<void> {
   renderChrome();
   // The columns are measured in the mono font: again once it is in.
   void document.fonts.ready.then(() => { text.fit(); registers?.fit(); renderChrome(); });
-  requestAnimationFrame(() => editor.view.focus()); // straight into the Editor: no first screen
 }
 void start();

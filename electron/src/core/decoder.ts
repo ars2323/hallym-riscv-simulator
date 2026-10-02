@@ -18,12 +18,18 @@
        0x37 LUI, 0x17 AUIPC                         U
        0x6f JAL                                     J
 
-   Taking a word apart into its fields is per format, in FORMATS below.
-   This round R and I are there; S, B, U and J are one entry each to add
-   (their bit layouts are in the comment beside FORMATS) -- nothing else in
-   the decoder, the Inspector or the tests needs to change for them:
-   `fields` is null for a format not yet in FORMATS, and the Inspector says
-   so instead of drawing a wrong picture. */
+   Taking a word apart into its fields is per format, in FORMATS below: R,
+   I, S, B, U and J (R4, the fused multiply-adds, is not taken apart: the
+   Inspector says so instead of drawing a wrong picture).
+
+   RISC-V cuts its immediates into pieces and scatters them over the word
+   (so that rs1, rs2 and rd stay where they are in every format).  PIECES
+   says, per format, which bits of the word are which bits of the immediate;
+   immediateParts() puts them together, and that is what the Inspector
+   draws: the pieces, where each one goes, the bits that are always 0 (B and
+   J's lowest, U's lower twelve) and the sign extension.  immediateOf() is
+   the same number from the spec's formulas, written separately: the tests
+   check the two against each other and against RARS. */
 
 export interface InstructionField {
   name: string;   // "opcode", "rd", "funct3", "rs1", "rs2", "funct7", "imm[11:0]", "shamt"
@@ -95,20 +101,68 @@ const isShiftImmediate = (word: number) => (word & 0x7f) === 0x13 && (bits(word,
 const field = (name: string, high: number, low: number, word: number): InstructionField =>
   ({ name, high, low, value: bits(word, high, low) });
 
-/* How each format is taken apart.  To add a format, add its entry; its
-   layout, most significant first:
-     S  imm[11:5] 31-25  rs2 24-20  rs1 19-15  funct3 14-12  imm[4:0] 11-7  opcode 6-0
-     B  imm[12|10:5] 31-25  rs2  rs1  funct3  imm[4:1|11] 11-7  opcode
-     U  imm[31:12] 31-12  rd 11-7  opcode
-     J  imm[20|10:1|11|19:12] 31-12  rd 11-7  opcode
-   (and the field's meaning in instruction-text.ts meaningOf). */
+/* How each format is taken apart: its fields, most significant first.
+   An immediate's field is named by the bits of the immediate it holds, in
+   the order they sit in the word ("imm[12|10:5]": bit 12, then bits 10..5). */
 export const FORMATS: Partial<Record<Format, (word: number) => InstructionField[]>> = {
   R: (w) => [field('funct7', 31, 25, w), field('rs2', 24, 20, w), field('rs1', 19, 15, w), field('funct3', 14, 12, w),
     field('rd', 11, 7, w), field('opcode', 6, 0, w)],
   I: (w) => [
     ...(isShiftImmediate(w) ? [field('funct7', 31, 25, w), field('shamt', 24, 20, w)] : [field('imm[11:0]', 31, 20, w)]),
     field('rs1', 19, 15, w), field('funct3', 14, 12, w), field('rd', 11, 7, w), field('opcode', 6, 0, w)],
+  S: (w) => [field('imm[11:5]', 31, 25, w), field('rs2', 24, 20, w), field('rs1', 19, 15, w), field('funct3', 14, 12, w),
+    field('imm[4:0]', 11, 7, w), field('opcode', 6, 0, w)],
+  B: (w) => [field('imm[12|10:5]', 31, 25, w), field('rs2', 24, 20, w), field('rs1', 19, 15, w), field('funct3', 14, 12, w),
+    field('imm[4:1|11]', 11, 7, w), field('opcode', 6, 0, w)],
+  U: (w) => [field('imm[31:12]', 31, 12, w), field('rd', 11, 7, w), field('opcode', 6, 0, w)],
+  J: (w) => [field('imm[20|10:1|11|19:12]', 31, 12, w), field('rd', 11, 7, w), field('opcode', 6, 0, w)],
 };
+
+/* One piece of an immediate: word bits wordHigh..wordLow (in the field
+   `field`) are immediate bits immHigh..immLow. */
+export interface ImmediatePiece {
+  field: string;
+  wordHigh: number;
+  wordLow: number;
+  immHigh: number;
+  immLow: number;
+  value: number;   // the piece's bits, right-aligned
+}
+
+export interface ImmediateParts {
+  width: number;          // the bits the format encodes, implicit zeros included: I and S 12, B 13, J 21, U 32
+  pieces: ImmediatePiece[];   // by their place in the immediate, highest first
+  zeros: number;          // the lowest bits that are 0 without being in the word: B and J 1, U 12
+  signExtended: boolean;  // bit width-1 is copied up to bit 31 (all but U)
+  value: number;          // the immediate as the instruction uses it (32 bits, signed)
+}
+
+// [field, word high, word low, immediate high, immediate low], highest immediate bits first.
+const PIECES: Partial<Record<Format, [string, number, number, number, number][]>> = {
+  I: [['imm[11:0]', 31, 20, 11, 0]],
+  S: [['imm[11:5]', 31, 25, 11, 5], ['imm[4:0]', 11, 7, 4, 0]],
+  B: [['imm[12|10:5]', 31, 31, 12, 12], ['imm[4:1|11]', 7, 7, 11, 11], ['imm[12|10:5]', 30, 25, 10, 5], ['imm[4:1|11]', 11, 8, 4, 1]],
+  U: [['imm[31:12]', 31, 12, 31, 12]],
+  J: [['imm[20|10:1|11|19:12]', 31, 31, 20, 20], ['imm[20|10:1|11|19:12]', 19, 12, 19, 12],
+    ['imm[20|10:1|11|19:12]', 20, 20, 11, 11], ['imm[20|10:1|11|19:12]', 30, 21, 10, 1]],
+};
+const WIDTH: Partial<Record<Format, number>> = { I: 12, S: 12, B: 13, U: 32, J: 21 };
+
+/* The immediate of `word` as its pieces.  null where there is no immediate
+   to put together: R, R4, an I-type shift (shamt is a plain field), and the
+   SYSTEM and MISC-MEM words (ecall/ebreak, the CSR number, fence's bits). */
+export function immediateParts(word: number): ImmediateParts | null {
+  const format = formatOf(word);
+  const layout = format ? PIECES[format] : undefined;
+  const op = word & 0x7f;
+  if (!format || !layout || isShiftImmediate(word) || op === 0x73 || op === 0x0f) return null;
+  const width = WIDTH[format]!;
+  const pieces = layout.map(([f, wh, wl, ih, il]) => ({ field: f, wordHigh: wh, wordLow: wl, immHigh: ih, immLow: il, value: bits(word, wh, wl) }));
+  const zeros = Math.min(...pieces.map((p) => p.immLow));
+  const raw = pieces.reduce((v, p) => (v | (p.value << p.immLow)) >>> 0, 0);
+  const signExtended = format !== 'U';
+  return { width, pieces, zeros, signExtended, value: signExtended ? signExtend(raw, width) : raw | 0 };
+}
 
 const R_NAMES: Record<string, string> = {
   '0,0': 'add', '32,0': 'sub', '0,1': 'sll', '0,2': 'slt', '0,3': 'sltu', '0,4': 'xor', '0,5': 'srl', '32,5': 'sra', '0,6': 'or', '0,7': 'and',

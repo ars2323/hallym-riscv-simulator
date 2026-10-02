@@ -20,7 +20,7 @@ import { expect, test } from '@playwright/test';
 import path from 'node:path';
 
 import { javaPids } from '../helpers/processes.ts';
-import { answerSave, launch, openAndAssemble, openOnly, program, regHex, root, settled, statusText, type Running } from './harness.ts';
+import { answerSave, launch, newFile, openAndAssemble, openOnly, program, regHex, root, settled, statusText, type Running } from './harness.ts';
 
 let r: Running;
 test.beforeEach(async () => { r = await launch(); });
@@ -48,9 +48,10 @@ main:
 
 test('1-6: opens on the Editor, writes a program, assembles, steps; registers, Text and the Inspector', async () => {
   const { page } = r;
-  // 1: straight into an empty Editor, no first screen
+  // 1: the first screen, then (바로 시작, 새 파일) an empty Editor
+  await expect(page.locator('.wcard')).toBeVisible();
+  await newFile(page);
   await expect(page.locator('.editor-panel .cm-content')).toBeVisible();
-  await expect(page.locator('.wcard')).toHaveCount(0);
   await expect(page.locator('.titlebar .file')).toContainText('untitled.s');
   // 2 (new): type a program; Ctrl+S asks where to save it, then assembles
   await answerSave(r.app, path.join(r.dir, 'arith.s'));

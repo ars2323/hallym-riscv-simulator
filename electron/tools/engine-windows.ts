@@ -14,9 +14,11 @@
       Korean, prints it back.  Control: -Dfile.encoding=COMPAT (the PC's code
       page: windows-1252 on the runner, MS949 on a Korean PC) must garble it.
    3. Kill: a busy engine (an endless loop) killed the way the host kills it
-      (transport.kill()): the exit is reported and the process is gone.
-      Control: a "kill" by SIGQUIT (a JVM on Linux prints its threads and
-      goes on; Windows has no such signal) must leave it alive.
+      (transport.kill(): SIGKILL, which on Windows -- no signals -- is
+      TerminateProcess): the exit is reported and the process is gone.
+      Control: a "kill" that relies on the engine's cooperation (closing its
+      stdin, a polite end) against an engine that does not cooperate
+      (-Dprobe.ignoreEof=true) must leave it alive.
    4. Orphan: a parent process that started an engine dies at once
       (TerminateProcess / SIGKILL, no goodbye): the engine leaves by itself
       (it reads the end of its stdin).  Control: -Dprobe.ignoreEof=true must
@@ -28,6 +30,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { engine } from '../src/main/paths.ts';
@@ -37,7 +40,8 @@ import { alive, goneWithin, killHard } from '../tests/helpers/processes.ts';
 
 const { values: opt } = parseArgs({ options: { java: { type: 'string' }, out: { type: 'string', default: 'report' } } });
 const base: EngineCommand = { ...engine(), ...(opt.java ? { java: opt.java } : {}) };
-const say = (s: string) => console.log(s);
+const T0 = Date.now();
+const say = (s: string) => console.log(`[${((Date.now() - T0) / 1000).toFixed(1)} s] ${s}`);
 const results: Record<string, unknown> = { platform: `${process.platform} ${process.arch}`, java: base.java };
 let failed = 0;
 const verdict = (name: string, ok: boolean, detail: string) => {
@@ -162,14 +166,16 @@ async function busy(extraArgs: string[] = []): Promise<Engine> {
   verdict('kill a busy engine', gone !== null, `exit reported after ${reported.toFixed(0)} ms as code=${exit.code} signal=${exit.signal}; process gone after ${gone} ms`);
   results.kill = { exitCode: exit.code, signal: exit.signal, reportedMs: Math.round(reported), goneMs: gone };
 
-  const c = await busy();
-  const cpid = c.t.pid!;
-  let threw = '';
-  try { process.kill(cpid, 'SIGQUIT'); } catch (err) { threw = (err as Error).message; }
-  const cgone = await goneWithin([cpid], 2000, say);
-  verdict('  control: a "kill" by SIGQUIT leaves it alive', cgone === null, threw ? `process.kill threw: ${threw}` : `still alive after 2 s`);
-  c.t.kill();
-  await goneWithin([cpid], 5000, say);
+  // The control: an engine that ignores the end of stdin, "killed" by closing its stdin.
+  const child = spawn(base.java, engineArgs({ ...base, extraArgs: [...(base.extraArgs ?? []), '-Dprobe.ignoreEof=true'] }),
+    { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+  child.stdout.resume();
+  await new Promise((r) => setTimeout(r, 1500));
+  child.stdin.end();
+  const cgone = await goneWithin([child.pid!], 2000, say);
+  verdict('  control: a polite end (stdin closed) leaves an engine that ignores it alive', cgone === null, cgone === null ? 'still alive after 2 s' : `gone after ${cgone} ms`);
+  child.kill('SIGKILL');
+  await goneWithin([child.pid!], 5000, say);
 }
 
 // ---- 4. orphan: the parent dies, the engine must go by itself
@@ -177,7 +183,7 @@ async function orphan(extraArgs: string[]): Promise<{ enginePid: number; goneMs:
   // A parent like the app's main process: starts an engine through the same
   // transport, runs an endless loop on it, prints the engine's pid, waits.
   const child = `
-    import { engineTransport } from ${JSON.stringify(path.join(import.meta.dirname, '../src/sim/transport.ts'))};
+    import { engineTransport } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, '../src/sim/transport.ts')).href)};
     const t = engineTransport(${JSON.stringify({ ...base, extraArgs: [...(base.extraArgs ?? []), ...extraArgs] })});
     t.onMessage((m) => {
       if (m.ev === 'ready') t.send({ id: 1, cmd: 'assemble', source: 'main:\\nloop: j loop\\n' });

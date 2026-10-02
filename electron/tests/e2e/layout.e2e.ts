@@ -13,10 +13,10 @@ test.afterEach(async () => { await r.close(); });
 
 const PROGRAM = 'main:\n  li t0, 5\n  li t1, 7\n  add t2, t0, t1\n  li a7, 10\n  ecall\n';
 
-test('the title bar is the window\'s own: name, a drag region, room for the caption buttons', async () => {
+test('the title bar is the window\'s own: name, logo, a drag region, room for the caption buttons', async () => {
   const { page } = r;
   await expect(page.locator('.titlebar .appname')).toHaveText('Hallym RISC-V');
-  await expect(page).toHaveTitle('untitled.s — Hallym RISC-V'); // no first screen: an untitled file from the start
+  await expect(page).toHaveTitle('Hallym RISC-V');
   expect(await page.evaluate(() => (navigator as unknown as { windowControlsOverlay?: { visible: boolean } }).windowControlsOverlay?.visible))
     .toBe(true); // titleBarOverlay: the system draws the caption buttons
   const regions = await page.evaluate(() => ({
@@ -35,7 +35,9 @@ test('the title bar is the window\'s own: name, a drag region, room for the capt
 
 test('Run side: a card before the first assemble, the machine after -- and still the machine once the code changes, with a band', async () => {
   const { page } = r;
-  await expect(page.locator('.editor-panel')).toBeVisible(); // the app opens on the Editor
+  await page.getByRole('button', { name: /바로 시작/ }).click();
+  await page.getByRole('button', { name: /새 파일/ }).first().click();
+  await expect(page.locator('.editor-panel')).toBeVisible();
   const card = page.locator('.run-placeholder');
   await expect(card).toHaveAttribute('data-kind', 'fresh');
   await expect(card).toContainText('아직 어셈블하지 않았습니다');

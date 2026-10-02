@@ -18,6 +18,7 @@ export interface AppApi {
   onInput(listener: (pc: number) => void): void;
   onCrashed(listener: (message: string, cause: string, restarted: boolean) => void): void;
   onEngineState(listener: (state: EngineState, detail: string) => void): void;
+  openExample(name: string): Promise<OpenedFile>;
   openFile(): Promise<OpenedFile | null>;
   saveFile(file: { path: string | null; name: string; text: string; format: TextFileFormat | null }):
     Promise<{ path: string; name: string } | null>;

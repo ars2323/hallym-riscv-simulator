@@ -1,8 +1,8 @@
 /* The notices (src/renderer/app/notice.ts): the Console's word before any
    output, the Inspector's before the first step, the card on the Run side
    before the first assemble -- one shape, in the middle of their panel,
-   at 1280x800 and on a maximised 1920 screen.  (RISC-V edition: the words
-   alone everywhere -- the university's characters are not in it.)  The error list under the Editor (the Assemble
+   the character at the far end and one size, at 1280x800 and on a
+   maximised 1920 screen.  The error list under the Editor (the Assemble
    panel) is the words alone, from the left, as tall as they are. */
 
 import { expect, test, type Page } from '@playwright/test';
@@ -16,17 +16,17 @@ const placed = (page: Page): Promise<Placed[]> => page.evaluate(() => [...docume
     const host = n.parentElement!;
     const a = n.getBoundingClientRect();
     const b = host.getBoundingClientRect();
-    const img = n.querySelector('img.char') as HTMLElement | null;
+    const img = n.querySelector('img.char') as HTMLElement;
     return {
       where: host.closest('section')?.getAttribute('aria-label') ?? host.className.split(' ')[0],
       dx: Math.round((a.left + a.right) / 2 - (b.left + b.right) / 2), dy: Math.round((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2),
-      char: img !== null && getComputedStyle(img).display !== 'none', charHeight: img?.getBoundingClientRect().height ?? 0,
+      char: getComputedStyle(img).display !== 'none', charHeight: img.getBoundingClientRect().height,
       title: getComputedStyle(n.querySelector('h3')!).fontSize, width: Math.round(a.width),
     };
   }));
 
 for (const size of [{ name: '1280x800', width: 1280, height: 800 }, { name: '1920x1040', width: 1920, height: 1040 }]) {
-  test(`${size.name}: each notice in the middle of its panel, the words alone, at one size`, async () => {
+  test(`${size.name}: each notice in the middle of its panel, with the character, at one size`, async () => {
     const r = await launch(size);
     const { page } = r;
     try {
@@ -42,7 +42,8 @@ for (const size of [{ name: '1280x800', width: 1280, height: 800 }, { name: '192
           // The Console's empty word is the words alone: the Console is kept as
           // short as they are (the height goes to Registers); the others have the character.
           if (p.where === 'Console') { expect(p.char, 'Console: the words alone').toBe(false); continue; }
-          expect(p.char, `${p.where}: no character`).toBe(false);
+          expect(p.char, `${p.where}: the character`).toBe(true);
+          expect(p.charHeight, `${p.where}: one size`).toBe(120);
           expect(p.title, `${p.where}: one title size`).toBe('16px');
           expect(p.width, `${p.where}: no wider than reads well`).toBeLessThanOrEqual(760);
         }
@@ -58,6 +59,7 @@ for (const size of [{ name: '1280x800', width: 1280, height: 800 }, { name: '192
       await page.keyboard.press('Control+s');
       await page.waitForSelector('.asm .item');
       await check(['Assemble', 'run-placeholder']);
+      await expect(page.locator('.asm .hint')).toContainText('혹시');
     } finally {
       await r.close();
     }

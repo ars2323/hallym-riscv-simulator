@@ -18,12 +18,5 @@
     "src/**/*.ts",
     "tests/**/*.ts",
     "tools/**/*.ts"
-  ],
-  "exclude": [
-    "tools/capture-default-goldens.ts",
-    "tools/probe-platform.ts",
-    "tools/start-variants.ts",
-    "tools/start-variants-list.ts",
-    "tools/start-video.ts"
   ]
 }

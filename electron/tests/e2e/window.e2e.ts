@@ -1,9 +1,10 @@
 /* The window as it opens and while it is covered: maximised at start; the
    caption buttons' patch (titleBarOverlay: Windows draws the buttons on it)
-   coloured under a dialog's backdrop, white again after; the question
-   dialogs (panels/ask.ts): a click outside does nothing, Esc is cancel, the
-   keys stay inside.  (RISC-V edition: no first screen and no tutorial, so
-   their tests are not here; the dialogs carry no character.) */
+   see-through with white symbols on the first screen, elsewhere coloured
+   under the tutorial's dim and a dialog's backdrop, white again after (what
+   the screen shows of it: start.e2e.ts, on Windows); the question dialogs (panels/ask.ts): Haram every time, a click
+   outside does nothing, Esc is cancel, the backdrop covers the tutorial's
+   card, the keys stay inside. */
 
 import { expect, test } from '@playwright/test';
 
@@ -12,6 +13,8 @@ import { launch, openAndAssemble, program, type Running } from './harness.ts';
 const PROGRAM = 'main:\n  li a7, 10\n  ecall\n';
 const overlay = (r: Running) => r.app.evaluate(({ BrowserWindow }) => (BrowserWindow.getAllWindows()[0] as unknown as { overlayColor?: string }).overlayColor ?? '#ffffff');
 const symbols = (r: Running) => r.app.evaluate(({ BrowserWindow }) => (BrowserWindow.getAllWindows()[0] as unknown as { overlaySymbol?: string }).overlaySymbol ?? '#00205b');
+const visibleHarams = (r: Running) => r.page.evaluate(() => [...document.querySelectorAll('img.char')]
+  .filter((e) => e.checkVisibility({ visibilityProperty: true })).map((e) => (e.closest('dialog') ? 'dialog' : e.closest('.tut-card') ? 'card' : 'panel')));
 
 test('opens maximised (Windows), at its own 1280x800 where nothing maximises it', async () => {
   const r = await launch({ width: 1280, height: 800 }, { keepSize: true });
@@ -19,6 +22,27 @@ test('opens maximised (Windows), at its own 1280x800 where nothing maximises it'
     const w = await r.app.evaluate(({ BrowserWindow }) => { const b = BrowserWindow.getAllWindows()[0]; return { maximized: b.isMaximized(), size: b.getContentSize() }; });
     if (process.platform === 'win32') expect(w.maximized).toBe(true);
     else if (!w.maximized) expect(w.size).toEqual([1280, 800]);
+  } finally {
+    await r.close();
+  }
+});
+
+test('the caption buttons\' patch: see-through with white symbols on the first screen, whatever covers it', async () => {
+  const r = await launch();
+  const { page } = r;
+  try {
+    // Its title bar is dark glass over the photo: the patch shows it (and a dialog's backdrop) through.
+    await expect.poll(() => overlay(r)).toBe('#00000000');
+    expect(await symbols(r)).toBe('#ffffff');
+    await page.getByTitle('Settings').click();
+    await expect(page.locator('dialog.settings')).toBeVisible();
+    await page.waitForTimeout(200);
+    expect(await overlay(r)).toBe('#00000000');
+    await page.locator('dialog.settings').getByRole('button', { name: 'Close' }).click();
+    // A file open: the white title bar, the patch white with navy symbols.
+    await openAndAssemble(r, program(r.dir, 'p.s', PROGRAM));
+    await expect.poll(() => overlay(r)).toBe('#ffffff');
+    expect(await symbols(r)).toBe('#00205b');
   } finally {
     await r.close();
   }
@@ -39,7 +63,28 @@ test('the caption buttons\' patch follows a dialog\'s backdrop in the Editor, an
   }
 });
 
-test('a question: modal, a click outside does nothing, Esc is cancel, Tab stays inside', async () => {
+test('the caption buttons\' patch follows the tutorial\'s dim, and both, and is the first screen\'s again after', async () => {
+  const r = await launch();
+  const { page } = r;
+  try {
+    await page.getByRole('button', { name: /튜토리얼 보기/ }).click();
+    await expect.poll(() => overlay(r)).toBe('#bdc5d4');   // under navy at 26 %
+    expect(await symbols(r)).toBe('#00205b');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('dialog.ask')).toBeVisible();
+    await expect.poll(() => overlay(r)).toBe('#7b8baa');   // both
+    await page.locator('dialog.ask').getByRole('button', { name: '계속하기' }).click();
+    await expect.poll(() => overlay(r)).toBe('#bdc5d4');
+    await page.keyboard.press('Escape');
+    await page.locator('dialog.ask').getByRole('button', { name: '그만두기' }).click();
+    await expect(page.locator('.wcard')).toBeVisible();
+    await expect.poll(() => overlay(r)).toBe('#00000000'); // back on the first screen
+  } finally {
+    await r.close();
+  }
+});
+
+test('a question: Haram, modal, a click outside does nothing, Esc is cancel, Tab stays inside', async () => {
   const r = await launch();
   const { page } = r;
   try {
@@ -48,7 +93,10 @@ test('a question: modal, a click outside does nothing, Esc is cancel, Tab stays 
     const dialog = page.locator('dialog.ask');
     await expect(dialog).toBeVisible();
     expect(await dialog.evaluate((d) => d.matches(':modal'))).toBe(true);
-    await expect(page.locator('img.char')).toHaveCount(0); // no character in this edition
+    // Haram in the dialog (the panels' own, under the backdrop, are not the tutorial's: no card here).
+    const harams = await visibleHarams(r);
+    expect(harams.filter((h) => h === 'dialog')).toHaveLength(1);
+    expect(harams).not.toContain('card');
     expect(await dialog.evaluate((d) => getComputedStyle(d, '::backdrop').backgroundColor)).toBe('rgba(0, 32, 91, 0.35)');
     // Outside: the backdrop, the Editor, the title bar -- nothing happens.
     const h = await page.evaluate(() => window.innerHeight);
@@ -68,3 +116,33 @@ test('a question: modal, a click outside does nothing, Esc is cancel, Tab stays 
   }
 });
 
+test('a question over the tutorial: its Haram alone, the card and rings under the backdrop, a click outside does nothing', async () => {
+  const r = await launch();
+  const { page } = r;
+  try {
+    await page.getByRole('button', { name: /튜토리얼 보기/ }).click();
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __tutorial: { shown: { step: number } } }).__tutorial.shown.step)).toBe(1);
+    await page.locator('.tut-card .tut-quit').click();
+    const dialog = page.locator('dialog.ask');
+    await expect(dialog).toContainText('튜토리얼을 그만둘까요?');
+    expect(await visibleHarams(r)).toEqual(['dialog']);
+    // The dialog is in the top layer: over the tutorial's card, whatever its z-index.
+    const over = await page.evaluate(() => {
+      const card = document.querySelector('.tut-card')!.getBoundingClientRect();
+      const hit = document.elementFromPoint(card.left + 10, card.top + 10);
+      return hit?.closest('dialog') ? 'dialog' : hit?.closest('.tut-card') ? 'card' : 'other';
+    });
+    expect(over).toBe('dialog');
+    const target = await page.evaluate(() => (window as unknown as { __tutorial: { shown: { targets: { left: number; top: number; right: number; bottom: number }[] } } }).__tutorial.shown.targets[0]);
+    await page.mouse.click((target.left + target.right) / 2, (target.top + target.bottom) / 2); // where the step points: nothing happens
+    await page.mouse.click(5, 400);
+    await page.waitForTimeout(200);
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as { __tutorial: { active: boolean } }).__tutorial.active)).toBe(true);
+    expect(await visibleHarams(r)).toEqual(['card']);
+  } finally {
+    await r.close();
+  }
+});

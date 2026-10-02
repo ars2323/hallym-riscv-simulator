@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('app', {
   onConsole: (listener) => ipcRenderer.on('sim:console', (_e, text) => listener(text)),
   onInput: (listener) => ipcRenderer.on('sim:input', (_e, pc) => listener(pc)),
   onCrashed: (listener) => ipcRenderer.on('sim:crashed', (_e, message, cause, restarted) => listener(message, cause, restarted)),
+  openExample: (name) => ipcRenderer.invoke('example:open', name).then(unwrap),
   onEngineState: (listener) => ipcRenderer.on('sim:state', (_e, state, detail) => listener(state, detail)),
   openFile: () => ipcRenderer.invoke('file:open').then(unwrap),
   saveFile: (file) => ipcRenderer.invoke('file:save', file).then(unwrap),

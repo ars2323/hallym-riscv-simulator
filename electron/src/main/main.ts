@@ -3,7 +3,7 @@
    process, and everything that touches the disk: source files (decoded and
    encoded here, src/node/text-file.ts).  The window sees only window.app
    (preload.cjs).  (The MIPS edition's main process; the N-API worker became
-   the engine, the .hmx export, the examples and the tutorial are not here.)
+   the engine; the .hmx export is not here.)
 
    Nothing is kept from one run to the next -- lab PCs are shared, and every
    student starts from the same screen: the window's size, the panels, the
@@ -193,6 +193,10 @@ async function main(): Promise<void> {
   sim.on('crashed', (report) => toWindow('sim:crashed', report.message, report.cause, report.restarted));
   sim.on('state', (state, detail) => toWindow('sim:state', state, detail));
 
+  ipcMain.handle('example:open', (_e, name: string) => answer(() => {
+    if (!/^[a-z0-9-]+\.s$/.test(name)) throw new Error(`no example ${name}`);
+    return openBytes(readFileSync(path.join(paths.examples, name)), name, null);
+  }));
   ipcMain.handle('file:open', () => answer(async () => {
     const r = await dialog.showOpenDialog(win, { filters: [{ name: 'RISC-V assembly', extensions: ['s', 'asm'] }, { name: 'All files', extensions: ['*'] }] });
     if (r.canceled || r.filePaths.length === 0) return null;
