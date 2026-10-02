@@ -1,8 +1,8 @@
 {
- "sha": "5a90f3c3fe84352ec76926fb81b89f100cd677be",
- "date": "2026-10-02T06:57:10Z",
- "killed": 156,
- "run": "https://github.com/ars2323/hallym-riscv-simulator/actions/runs/36976053567",
+ "sha": "2ee1e1291b2bc716b42f4b4a444b4db69791e634",
+ "date": "2026-10-02T09:02:30Z",
+ "killed": 157,
+ "run": "https://github.com/ars2323/hallym-riscv-simulator/actions/runs/36987487783",
  "mutants": [
   "columns: a badge at the cost of the font's pixel",
   "columns: a column given up before it has to",
@@ -159,6 +159,7 @@
   "window: the title bar's controls as tall as their words",
   "window: the tutorial's example called Save & Assemble",
   "window: the tutorial's own Haram stays up behind a question",
+  "window: the window titled Hallym MIPS (the MIPS page's <title>)",
   "window: what Ctrl+S did with the file not said after a clean assemble"
  ]
 }
