@@ -17,8 +17,9 @@
    Korean through stdio, kill. */
 
 import { expect, test } from '@playwright/test';
-import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { goneWithin, javaPids, killHard } from '../helpers/processes.ts';
@@ -43,7 +44,9 @@ test('1: closing the window ends both engines', async () => {
 
 // The app killed while the simulator runs an endless loop; returns ms until both engines were gone, or null.
 async function killedApp(env: Record<string, string>): Promise<{ ms: number | null; pids: number[] }> {
-  const r = await launch(undefined, { env });
+  const dir = mkdtempSync(path.join(tmpdir(), 'engine-trace-'));
+  const trace = path.join(dir, 'trace.txt');
+  const r = await launch(undefined, { env: { ...env, ENGINE_JAVA_ARGS: `${env.ENGINE_JAVA_ARGS ?? ''} -Dprobe.trace=${trace}`.trim() } });
   const pids = await bothEngines(r);
   await openAndAssemble(r, program(r.dir, 'loop.s', 'main:\nloop: j loop\n'));
   await r.page.keyboard.press('F5');
@@ -51,6 +54,13 @@ async function killedApp(env: Record<string, string>): Promise<{ ms: number | nu
   say(`  app ${r.app.process().pid} with engines ${pids.join(' ')}: killing the app's main process alone`);
   killHard(r.app.process().pid!);
   const ms = await goneWithin(pids, 5000, say);
+  // What the engines saw (their trace) and, on Windows, who their parents are: the evidence when one stays.
+  say(`engine trace:\n${existsSync(trace) ? readFileSync(trace, 'utf8') : '(none written)'}`);
+  if (process.platform === 'win32' && ms === null) {
+    say(execFileSync('powershell.exe', ['-NoProfile', '-Command',
+      `Get-CimInstance Win32_Process -Filter "ProcessId=${pids.join(' or ProcessId=')}" | ForEach-Object { "$($_.ProcessId) parent $($_.ParentProcessId) $($_.Name)" }; `
+      + `Get-CimInstance Win32_Process -Filter "Name='HallymRISCV.exe' or Name='electron.exe'" | ForEach-Object { "$($_.ProcessId) parent $($_.ParentProcessId) $($_.Name) $($_.CommandLine)".Substring(0, [Math]::Min(200, "$($_.ProcessId) parent $($_.ParentProcessId) $($_.Name) $($_.CommandLine)".Length)) }`], { encoding: 'utf8' }));
+  }
   for (const p of pids) { try { killHard(p); } catch { /* gone */ } }
   // Chromium's own processes outlive a killed main process for a moment and still write there.
   try { rmSync(r.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); } catch (e) { say(`  (scratch directory left: ${(e as Error).message})`); }

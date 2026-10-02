@@ -29,6 +29,15 @@ public class RarsProbe {
     // ---- protocol channel: the real fd 1, never touched by RARS ----
     static final PrintStream proto = new PrintStream(new FileOutputStream(FileDescriptor.out), false, StandardCharsets.UTF_8);
 
+    // -Dprobe.trace=<file>: what the engine saw of its end (the orphan checks read it when one fails).
+    static void trace(String what) {
+        String f = System.getProperty("probe.trace");
+        if (f == null) return;
+        try (java.io.FileWriter w = new java.io.FileWriter(f, StandardCharsets.UTF_8, true)) {
+            w.write(System.currentTimeMillis() + " pid " + ProcessHandle.current().pid() + " " + System.getProperty("hallym.engine", "?") + ": " + what + "\n");
+        } catch (IOException e) { /* nothing to say it with */ }
+    }
+
     static synchronized void send(String json) {
         proto.print(json);
         proto.print('\n');
@@ -160,8 +169,9 @@ public class RarsProbe {
         if (parent != null && !Boolean.getBoolean("probe.ignoreEof")) {
             try {
                 java.util.Optional<ProcessHandle> ph = ProcessHandle.of(Long.parseLong(parent));
+                trace("watching parent " + parent + (ph.isPresent() ? "" : ": already gone"));
                 if (ph.isEmpty()) System.exit(0);
-                ph.get().onExit().thenRun(() -> System.exit(0));
+                ph.get().onExit().thenRun(() -> { trace("parent " + parent + " exited: leaving"); System.exit(0); });
             } catch (NumberFormatException e) { /* no such pid: nothing to watch */ }
         }
         send("{\"ev\":\"ready\",\"protocol\":" + PROTOCOL + ",\"rars\":" + Json.str(Globals.version) + "}");
@@ -187,6 +197,7 @@ public class RarsProbe {
         // stdin ended: whoever started us is gone (on Windows a dead parent leaves no signal, only
         // this end of file), so we go too -- an engine left behind would pile up on a shared lab PC.
         // -Dprobe.ignoreEof=true (negative control for the orphan check) stays instead.
+        trace("end of stdin" + (Boolean.getBoolean("probe.ignoreEof") ? ", ignored" : ": leaving"));
         if (Boolean.getBoolean("probe.ignoreEof")) Thread.sleep(Long.MAX_VALUE);
         System.exit(0);
     }
