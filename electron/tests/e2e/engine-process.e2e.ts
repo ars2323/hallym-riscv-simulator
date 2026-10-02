@@ -137,9 +137,9 @@ test('2, negative control: none of the three ways -> the engines are left behind
   expect(ways).toEqual({ main: 'none', checker: 'none' });
 });
 
-// Windows: the windows that appear on the desktop while the app starts, its
-// engine is killed and restarted, and the app closes.
-async function windowsSeen(env: Record<string, string>, out: string): Promise<{ class: string; title: string; process: string; ms: number }[]> {
+// Windows: the windows that appear on the desktop while `during` runs.
+type Seen = { class: string; title: string; process: string; ms: number };
+async function windowsSeen(out: string, during: () => Promise<void>): Promise<Seen[]> {
   const started = `${out}.started`;
   rmSync(started, { force: true });
   const watcher = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
@@ -151,35 +151,61 @@ async function windowsSeen(env: Record<string, string>, out: string): Promise<{ 
     if (Date.now() - t0 > 30_000) throw new Error('the window watcher did not start within 30 s');
     await new Promise((r) => setTimeout(r, 250));
   }
-  // Without a console of its own, as a student starts it (Start menu, the installer): Electron
-  // attaches to its parent's console unless told not to, and Playwright starts it under cmd.exe
-  // (CI, 5a90f3c: cmd.exe /d /s /c "...HallymRISCV.exe" ...).  With that console java.exe has one to
-  // share and no window appears, hidden or not: the control could not fail (it did not, 5a90f3c).
-  const r = await launch(undefined, { env: { ...env, ELECTRON_NO_ATTACH_CONSOLE: '1' } });
-  const pids = await bothEngines(r);
-  await openAndAssemble(r, program(r.dir, 'p.s', 'main:\n  li a0, 7\n  li a7, 10\n  ecall\n'));
-  killHard(javaPids('-Dhallym.engine=main', r.dir)[0]);              // a restart: a third java.exe
-  await expect(r.page.locator('.run-placeholder')).toContainText('엔진을 다시 시작했습니다');
-  await expect.poll(() => javaPids('-Dhallym.engine=main', r.dir).filter((p) => !pids.includes(p)).length, { timeout: 15_000 }).toBe(1);
-  await r.page.waitForTimeout(1000);
-  await r.close();
+  await during();
   const code = await Promise.race([exited, new Promise<'cap'>((done) => setTimeout(() => done('cap'), 40_000))]);
   if (code !== 0) throw new Error(`the window watcher ended with ${code}`);
-  const seen = JSON.parse(readFileSync(out, 'utf8').replace(/^﻿/, '')).appeared as { class: string; title: string; process: string; ms: number }[];
+  const seen = JSON.parse(readFileSync(out, 'utf8').replace(/^\uFEFF/, '')).appeared as Seen[];
   say(`windows that appeared: ${JSON.stringify(seen)}`);
   return seen;
 }
 const consoleLike = (w: { class: string; process: string }) =>
   /^(ConsoleWindowClass|CASCADIA_HOSTING_WINDOW_CLASS|PseudoConsoleWindow)$/.test(w.class) || /^(java|javaw|conhost|OpenConsole|WindowsTerminal)$/i.test(w.process);
 
+// Which of these processes has a console of its own: a conhost.exe (or
+// OpenConsole.exe) child.  The evidence when a console window does or does
+// not appear.
+function consoles(pids: number[]): string {
+  return execFileSync('powershell.exe', ['-NoProfile', '-Command',
+    `$all = @(Get-CimInstance Win32_Process); foreach ($p in @(${pids.join(',')})) { $me = $all | Where-Object { $_.ProcessId -eq $p }; $hosts = @($all | Where-Object { $_.ParentProcessId -eq $p -and ($_.Name -eq 'conhost.exe' -or $_.Name -eq 'OpenConsole.exe') } | ForEach-Object { "$($_.Name) $($_.ProcessId)" }); "  $p $($me.Name): console host child: $(if ($hosts.Count) { $hosts -join ', ' } else { 'none' })" }`],
+  { encoding: 'utf8' }).trimEnd();
+}
+
+// The app as a student starts it, without a console (Start menu, the
+// installer): Electron attaches to its parent's console unless told not to,
+// and Playwright starts it under cmd.exe (CI, 5a90f3c).  It starts its
+// engines, one is killed and started again, the app closes.
+async function appRun(env: Record<string, string>): Promise<void> {
+  const r = await launch(undefined, { env: { ...env, ELECTRON_NO_ATTACH_CONSOLE: '1' } });
+  const pids = await bothEngines(r);
+  const main = await r.app.evaluate(() => process.pid);
+  say(`consoles (main ${main}, engines ${pids.join(' ')}):\n${consoles([main, ...pids])}`);
+  await openAndAssemble(r, program(r.dir, 'p.s', 'main:\n  li a0, 7\n  li a7, 10\n  ecall\n'));
+  killHard(javaPids('-Dhallym.engine=main', r.dir)[0]);              // a restart: a third java.exe
+  await expect(r.page.locator('.run-placeholder')).toContainText('엔진을 다시 시작했습니다');
+  await expect.poll(() => javaPids('-Dhallym.engine=main', r.dir).filter((p) => !pids.includes(p)).length, { timeout: 15_000 }).toBe(1);
+  const again = javaPids('-Dhallym.engine=main', r.dir);
+  say(`consoles after the restart:\n${consoles(again)}`);
+  await r.page.waitForTimeout(1000);
+  await r.close();
+}
+
+test('3 (Windows), the watcher\'s own control: a console program started from Explorer\'s way shows its window, and is seen', async ({}, info) => {
+  test.skip(process.platform !== 'win32', 'Windows only');
+  const seen = await windowsSeen(info.outputPath('windows.json'), async () => {
+    execFileSync('powershell.exe', ['-NoProfile', '-Command', "Start-Process cmd.exe -ArgumentList '/c','ping -n 5 127.0.0.1'"], { stdio: 'inherit' });
+    await new Promise((r) => setTimeout(r, 6000));
+  });
+  expect(seen.filter(consoleLike).length, 'a console window seen').toBeGreaterThan(0);
+});
+
 test('3 (Windows): no console window flashes up when engines start or restart', async ({}, info) => {
   test.skip(process.platform !== 'win32', 'Windows only');
-  const seen = await windowsSeen({}, info.outputPath('windows.json'));
+  const seen = await windowsSeen(info.outputPath('windows.json'), () => appRun({}));
   expect(seen.filter(consoleLike)).toEqual([]);
 });
 
 test('3 (Windows), negative control: without windowsHide a console window appears', async ({}, info) => {
   test.skip(process.platform !== 'win32', 'Windows only');
-  const seen = await windowsSeen({ ENGINE_WINDOWS_HIDE: '0' }, info.outputPath('windows.json'));
+  const seen = await windowsSeen(info.outputPath('windows.json'), () => appRun({ ENGINE_WINDOWS_HIDE: '0' }));
   expect(seen.filter(consoleLike).length).toBeGreaterThan(0);
 });
