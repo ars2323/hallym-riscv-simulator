@@ -50,14 +50,14 @@
   "evidence": "pc 0x400000->0x400004, executed 'auipc x10,0x0000fc10' code=0x0fc10517 line 5"
  },
  {
-  "check": "breakpoint set/clear without GUI",
+  "check": "breakpoint set/clear by source line",
   "verdict": "works",
-  "evidence": "run stopped at 0x400010 (BREAKPOINT), cleared, then ran to NORMAL_TERMINATION"
+  "evidence": "line 8 -> 0x400010, run stopped there (BREAKPOINT), cleared, then ran to NORMAL_TERMINATION"
  },
  {
   "check": "stop a running program",
   "verdict": "works",
-  "evidence": "reply 3.5 ms after stop, 164471 instructions ran, stepping resumes afterwards"
+  "evidence": "reply 3.0 ms after stop, 24714 instructions ran, stepping resumes afterwards"
  },
  {
   "check": "undo one step (RARS back-stepper)",
@@ -95,11 +95,6 @@
   "evidence": "step reply is withheld until input arrives (the step blocks; an input_wanted event says why)"
  },
  {
-  "check": "stop while waiting for input",
-  "verdict": "messy",
-  "evidence": "STOP returns, but RARS completes the ecall with its default input '0' (a0 77->0, pc past ecall); one backstep restores a0=77 and pc=ecall, and the next step asks for input again"
- },
- {
   "check": "structured assemble errors, several at once",
   "verdict": "works",
   "evidence": "L3:C9 \"addi\": Too few or incorrectly formatted operands. Expected: addi t1,t2,-100; L4:C14 \"t9\": operand is of incorrect type; L6:C9 \"bogus\" is not a recognized operator"
@@ -112,7 +107,7 @@
  {
   "check": "protocol contract (version, id types, error codes, symbols)",
   "verdict": "works",
-  "evidence": "protocol=1; string id echoed; codes ['address', 'assemble_error', 'bad_json', 'bad_request', 'not_runnable', 'unknown_cmd']; symbols ['loop', 'main', 'msg']"
+  "evidence": "protocol=2; string id echoed; codes ['address', 'assemble_error', 'bad_json', 'bad_request', 'not_runnable', 'unknown_cmd']; symbols ['loop', 'main', 'msg']"
  },
  {
   "check": "re-assemble in one JVM leaves no data/heap/symbol residue",
@@ -123,5 +118,15 @@
   "check": "leftover console input does not leak across re-assemble",
   "verdict": "works",
   "evidence": "fed '1\\n2\\n', re-assembled, next run asked for input again"
+ },
+ {
+  "check": "breakpoint survives re-assemble (engine re-resolves the line)",
+  "verdict": "works",
+  "evidence": "line 5 was 0x400008; after line 3 became code it is 0x40000c, and the run stops there without the app resending"
+ },
+ {
+  "check": "stop while waiting for input (engine undoes the ecall)",
+  "verdict": "works",
+  "evidence": "STOP reply has input_cancelled+undone; a0 stays 77, pc=0x400008 is the ecall; ReadString buffer stays 58595a00; same with backstep:false"
  }
 ]

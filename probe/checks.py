@@ -120,25 +120,114 @@ def check_step(p):
     p.output()
 
 
+BP_SRC = """# line 1
+main:   li   t0, 1        # line 2
+        # line 3: a comment that the second version turns into code
+        li   t1, 2        # line 4
+        li   t2, 3        # line 5
+        li   a7, 10       # line 6
+        ecall             # line 7
+"""
+BP_SRC_EDITED = BP_SRC.replace("        # line 3: a comment that the second version turns into code", "        nop               # line 3 (new)")
+
+
 def check_breakpoints(p):
     asm = p.call("assemble", source=case("hello.s"))
-    bp = asm["text"][4]["addr"]          # li a0, 42
-    assert p.call("bp", set=[bp])["ok"]
+    line = 8                                  # li a0, 42
+    r = p.call("bp", lines=[line])
+    bp = r["breakpoints"][0]["addr"]
+    assert bp == next(t["addr"] for t in asm["text"] if t["line"] == line), (r, asm["text"])
     r = p.call("run")
     assert r["reason"] == "BREAKPOINT" and r["pc"] == bp, r
-    p.call("bp", set=[])
+    p.call("bp", lines=[])
     r2 = p.call("run")
     assert r2["reason"] == "NORMAL_TERMINATION", r2
-    record("breakpoint set/clear without GUI", "works",
-           f"run stopped at {bp:#x} (BREAKPOINT), cleared, then ran to NORMAL_TERMINATION")
+    record("breakpoint set/clear by source line", "works",
+           f"line {line} -> {bp:#x}, run stopped there (BREAKPOINT), cleared, then ran to NORMAL_TERMINATION")
 
     def ctl():  # no breakpoint -> must not stop there
         p.call("assemble", source=case("hello.s"))
-        p.call("bp", set=[])
+        p.call("bp", lines=[])
         r3 = p.call("run")
         assert r3["reason"] == "BREAKPOINT", r3
     must_fail("no breakpoint, no BREAKPOINT stop", ctl)
     p.output()
+
+
+def breakpoint_survives(q):
+    """bp on line 5, then re-assemble a version where line 3 became code: the stop must still be line 5."""
+    q.call("assemble", source=BP_SRC)
+    q.call("bp", lines=[5])
+    first = q.call("run")
+    assert first["reason"] == "BREAKPOINT", first
+    a = q.call("assemble", source=BP_SRC_EDITED)       # the app sends nothing else
+    want = next(t["addr"] for t in a["text"] if t["line"] == 5)
+    assert a["breakpoints"] == [{"line": 5, "addr": want}], a["breakpoints"]
+    r = q.call("run")
+    stopped_line = next((t["line"] for t in a["text"] if t["addr"] == r["pc"]), None)
+    assert r["reason"] == "BREAKPOINT" and r["pc"] == want, (r["reason"], hex(r["pc"]), "line", stopped_line, "want", hex(want))
+    return first["pc"], want
+
+
+def check_breakpoints_survive(v1_probe):
+    p = Probe()
+    old, new = breakpoint_survives(p)
+    p.close()
+    record("breakpoint survives re-assemble (engine re-resolves the line)", "works",
+           f"line 5 was {old:#x}; after line 3 became code it is {new:#x}, and the run stops there without the app resending")
+    must_fail("protocol-1 behaviour (address kept) stops at the wrong line", lambda: breakpoint_survives(v1_probe))
+    v1_probe.close()
+
+
+STOP_INPUT_SRC = """        .data
+buf:    .ascii "XYZ\0"
+        .text
+main:   li   a0, 77
+        li   a7, 5           # ReadInt
+        ecall
+        la   a0, buf
+        li   a1, 4
+        li   a7, 8           # ReadString into buf
+        ecall
+        li   a7, 10
+        ecall
+"""
+
+
+def stop_during_input(q, backstep):
+    """Stop while each of two input syscalls waits; the engine must leave no trace of the ecall."""
+    q.call("assemble", source=STOP_INPUT_SRC)
+    asm_text = q.call("assemble", source=STOP_INPUT_SRC)["text"]
+    ecalls = [t["addr"] for t in asm_text if t["basic"].startswith("ecall")]
+    rid = q.send("run", backstep=backstep)
+    q.wait_event("input_wanted", timeout=5)
+    q.call("stop")
+    r = q.reply(rid, timeout=5)
+    assert r["reason"] == "STOP" and r.get("input_cancelled") and r.get("undone"), r
+    assert r["x"][10] == 77 and r["pc"] == ecalls[0], (r["x"][10], hex(r["pc"]))
+    # the next run asks again; give it a number, then stop during ReadString
+    rid = q.send("run", backstep=backstep)
+    q.wait_event("input_wanted", timeout=5)
+    q.call("input", text="5\n")
+    q.wait_event("input_wanted", timeout=5)
+    q.call("stop")
+    r2 = q.reply(rid, timeout=5)
+    mem = q.call("mem", addr=DATA_BASE, len=4)["hex"]
+    assert r2["reason"] == "STOP" and r2.get("undone") and r2["pc"] == ecalls[1], r2
+    assert mem == "58595a00", mem             # "XYZ\0" untouched: ReadString's write was undone too
+    return r, r2, mem
+
+
+def check_stop_input(v1_probe):
+    p = Probe()
+    r, r2, mem = stop_during_input(p, backstep=True)
+    stop_during_input(p, backstep=False)    # the engine records the ecall even with backstep off
+    p.close()
+    record("stop while waiting for input (engine undoes the ecall)", "works",
+           f"STOP reply has input_cancelled+undone; a0 stays 77, pc={r['pc']:#x} is the ecall; "
+           f"ReadString buffer stays {mem}; same with backstep:false")
+    must_fail("protocol-1 behaviour leaves the default input in a0", lambda: stop_during_input(v1_probe, backstep=True))
+    v1_probe.close()
 
 
 def check_stop(p):
@@ -235,23 +324,6 @@ def check_console(p):
     assert s["x"][10] == 5, s["x"][10]
     record("step into ReadInt", "messy", "step reply is withheld until input arrives (the step blocks; an input_wanted event says why)")
 
-    # stop while waiting, then undo the half-finished ecall with the back-stepper
-    p.call("assemble", source="main: li a0, 77\n li a7, 5\n ecall\n li a7, 10\n ecall\n")
-    rid = p.send("run")
-    p.wait_event("input_wanted", timeout=5)
-    p.call("stop")
-    r = p.reply(rid, timeout=5)
-    assert r["reason"] == "STOP" and r["x"][10] == 0 and r["pc"] == TEXT_BASE + 12, r
-    u = p.call("backstep")
-    assert u["pc"] == TEXT_BASE + 8 and u["x"][10] == 77, u
-    rid = p.send("step")
-    p.wait_event("input_wanted", timeout=5)
-    p.call("input", text="9\n")
-    assert p.reply(rid)["x"][10] == 9
-    record("stop while waiting for input", "messy",
-           "STOP returns, but RARS completes the ecall with its default input '0' (a0 77->0, pc past ecall); "
-           "one backstep restores a0=77 and pc=ecall, and the next step asks for input again")
-
     def ctl():  # hello.s never asks for input
         p.call("assemble", source=case("hello.s"))
         p.call("run")
@@ -289,7 +361,7 @@ def _assert_errors(r):
 # ---------------------------------------------------------------- protocol contract
 
 def check_protocol(p):
-    assert p.protocol == 1, p.protocol
+    assert p.protocol == 2, p.protocol
     # ids keep their JSON type
     p.send_raw('{"id":"s-1","cmd":"ping"}')
     r = p.reply_where(lambda m: m.get("id") == "s-1")
@@ -395,6 +467,8 @@ def main():
     check_protocol(p)
     p.close()
     check_repeat(Probe(jvm_args=["-Dprobe.skipStdioReset=true"]))
+    check_breakpoints_survive(Probe(jvm_args=["-Dprobe.v1Breakpoints=true"]))
+    check_stop_input(Probe(jvm_args=["-Dprobe.v1StopInput=true"]))
     os.makedirs(os.path.join(HERE, "results"), exist_ok=True)
     with open(os.path.join(HERE, "results", "checks.json"), "w") as f:
         json.dump(results, f, indent=1)

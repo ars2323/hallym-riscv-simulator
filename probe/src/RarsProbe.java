@@ -13,7 +13,7 @@ import java.util.*;
 
 public class RarsProbe {
     /** Engine protocol version; see docs/engine-protocol.md for what bumps it. */
-    static final int PROTOCOL = 1;
+    static final int PROTOCOL = 2;
 
     static String err(String code, String message) {
         return "\"ok\":false,\"code\":\"" + code + "\",\"error\":" + Json.str(message);
@@ -40,6 +40,8 @@ public class RarsProbe {
         private final ArrayDeque<Byte> buf = new ArrayDeque<>();
         private boolean cancelled = false;
         volatile boolean waiting = false;
+        /** Set when Stop cancelled a wait: RARS then finishes the ecall with its default input. */
+        volatile boolean waitCancelled = false;
 
         synchronized void feed(byte[] b) { for (byte x : b) buf.add(x); notifyAll(); }
         synchronized void cancel() { cancelled = true; notifyAll(); }
@@ -61,7 +63,15 @@ public class RarsProbe {
                 }
                 waiting = false;
             }
-            if (cancelled) { cancelled = false; throw new InterruptedIOException("stopped while waiting for input"); }
+            if (cancelled) {
+                cancelled = false;
+                waitCancelled = true;
+                // RARS will complete this ecall with "0"/"" once we throw. Make sure what it writes is
+                // recorded so finish() can undo exactly this ecall, even in a run with backstep off.
+                if (!V1_STOP_INPUT && Globals.program != null && Globals.program.getBackStepper() != null)
+                    Globals.program.getBackStepper().setEnabled(true);
+                throw new InterruptedIOException("stopped while waiting for input");
+            }
             int n = 0;
             while (n < len && !buf.isEmpty()) b[off + n++] = buf.poll();
             return n;
@@ -95,7 +105,37 @@ public class RarsProbe {
     static final ConsoleIn consoleIn = new ConsoleIn();
     static volatile boolean busy = false;
     static volatile boolean terminated = true;
+    // Breakpoints are kept as source lines and re-resolved to addresses after every assemble.
+    static List<Integer> bpLines = new ArrayList<>();
     static int[] breakpoints = new int[0];
+    static Map<Integer, Integer> bpAddr = new LinkedHashMap<>();   // line -> address (absent: no code there)
+
+    // Negative-control switches for checks.py only: restore the protocol-1 behaviour.
+    static final boolean V1_STOP_INPUT = Boolean.getBoolean("probe.v1StopInput");
+    static final boolean V1_BREAKPOINTS = Boolean.getBoolean("probe.v1Breakpoints");
+
+    static void resolveBreakpoints() {
+        Map<Integer, Integer> m = new LinkedHashMap<>();
+        if (Globals.program != null && Globals.program.getMachineList() != null) {
+            for (int line : bpLines) {
+                for (ProgramStatement st : Globals.program.getMachineList()) {
+                    if (st.getSourceLine() == line) { m.put(line, st.getAddress()); break; }  // first instruction of the line
+                }
+            }
+        }
+        bpAddr = m;
+        breakpoints = m.values().stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    static String breakpointsJson() {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < bpLines.size(); i++) {
+            int line = bpLines.get(i);
+            Integer a = bpAddr.get(line);
+            sb.append(i == 0 ? "" : ",").append("{\"line\":").append(line).append(",\"addr\":").append(a == null ? "null" : a.toString()).append('}');
+        }
+        return sb.append(']').toString();
+    }
 
     public static void main(String[] args) throws Exception {
         // Every path in RARS that falls back to the process stdio now hits our console streams.
@@ -151,10 +191,12 @@ public class RarsProbe {
             case "regs": return "\"ok\":true," + regsJson();
             case "mem": return mem(Json.num(req.get("addr")), Json.num(req.get("len")));
             case "bp": {
-                List<?> l = (List<?>) req.get("set");
-                breakpoints = new int[l.size()];
-                for (int i = 0; i < l.size(); i++) breakpoints[i] = Json.num(l.get(i));
-                return "\"ok\":true,\"count\":" + breakpoints.length;
+                List<?> l = (List<?>) req.get("lines");
+                TreeSet<Integer> lines = new TreeSet<>();
+                for (Object o : l) lines.add(Json.num(o));
+                bpLines = new ArrayList<>(lines);
+                resolveBreakpoints();
+                return "\"ok\":true,\"breakpoints\":" + breakpointsJson();
             }
             case "backstep": {
                 if (Globals.program == null || Globals.program.getBackStepper() == null || Globals.program.getBackStepper().empty())
@@ -169,7 +211,7 @@ public class RarsProbe {
                     Globals.program.getBackStepper().setEnabled(!Boolean.FALSE.equals(req.get("backstep")));
                 if (terminated) return err("not_runnable", "assemble first, or the program has finished");
                 int max = "step".equals(cmd) ? 1 : (req.containsKey("max") ? Json.num(req.get("max")) : -1);
-                pending = new Pending(idJson(req.get("id")), "step".equals(cmd));
+                pending = new Pending(idJson(req.get("id")), "step".equals(cmd), !Boolean.FALSE.equals(req.get("backstep")));
                 consoleIn.uncancel();
                 busy = true;
                 Simulator.getInstance().startSimulation(pending.pcBefore, max, breakpoints);
@@ -221,7 +263,9 @@ public class RarsProbe {
                       .append(",\"segment\":\"").append(sym.getType() ? "data" : "text").append("\",\"global\":").append(g == 1).append('}');
                 }
             }
-            sb.append("],\"pc\":").append(RegisterFile.getProgramCounter());
+            if (!V1_BREAKPOINTS || bpAddr.isEmpty()) resolveBreakpoints();
+            sb.append("],\"breakpoints\":").append(breakpointsJson());
+            sb.append(",\"pc\":").append(RegisterFile.getProgramCounter());
         } catch (AssemblyException e) {
             sb.setLength(0);
             sb.append(err("assemble_error", "assembly failed")).append(",\"errors\":").append(errorsJson(e.errors()));
@@ -235,7 +279,8 @@ public class RarsProbe {
         final int pcBefore = RegisterFile.getProgramCounter();
         final long instret0 = ControlAndStatusRegisterFile.getValueNoNotify("instret");
         final long t0 = System.nanoTime();
-        Pending(Object id, boolean isStep) { this.id = id; this.isStep = isStep; }
+        final boolean backstep;
+        Pending(Object id, boolean isStep, boolean backstep) { this.id = id; this.isStep = isStep; this.backstep = backstep; }
     }
     static volatile Pending pending;
 
@@ -252,6 +297,20 @@ public class RarsProbe {
             terminated = true;
             sb.append(",\"exit\":").append(Globals.exitCode);
         }
+        if (consoleIn.waitCancelled) {
+            // Stop arrived while the program waited for input. RARS has already completed the ecall
+            // with its default input; undo it so no input the student never typed reaches the program.
+            consoleIn.waitCancelled = false;
+            boolean undone = false;
+            if (!V1_STOP_INPUT && r == Simulator.Reason.STOP && Globals.program.getBackStepper() != null
+                    && !Globals.program.getBackStepper().empty()) {
+                Globals.program.getBackStepper().backStep();
+                undone = true;
+            }
+            sb.append(",\"input_cancelled\":true,\"undone\":").append(undone);
+        }
+        if (Globals.program != null && Globals.program.getBackStepper() != null)
+            Globals.program.getBackStepper().setEnabled(pd.backstep);
         if (e != null) {
             ErrorMessage m = e.error();
             sb.append(",\"cause\":").append(e.cause())
@@ -290,7 +349,8 @@ public class RarsProbe {
     static String mem(int addr, int len) {
         StringBuilder hex = new StringBuilder(len * 2);
         try {
-            for (int a = addr; a < addr + len; a++) {
+            for (int i = 0; i < len; i++) {   // not a < addr + len: that overflows for a range ending at 0x80000000
+                int a = addr + i;
                 int b = Globals.memory.getByte(a);
                 hex.append(HEX[(b >> 4) & 0xf]).append(HEX[b & 0xf]);
             }
