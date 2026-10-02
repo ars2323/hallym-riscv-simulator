@@ -11,7 +11,7 @@
    PATH, later the bundled jlink runtime) and the class path of the engine's
    classes and the RARS jar (src/main/paths.ts engine()). */
 
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process';
 
 import type { EngineMessage } from './protocol.ts';
 
@@ -60,14 +60,22 @@ const STDERR_KEPT = 8192;
 export function engineArgs(cmd: EngineCommand): string[] {
   return ['-Xlog:disable', '-Xlog:all=warning:stderr', '-Djava.awt.headless=true',
     '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8',
-    // This process: the engine leaves when it is gone (RarsProbe, "hallym.parent").
-    `-Dhallym.parent=${process.pid}`,
+    // This process: the engine leaves when it is gone (RarsProbe, "parent.pid").
+    `-Dparent.pid=${process.pid}`,
     ...(cmd.prefsDir ? [`-Djava.util.prefs.userRoot=${cmd.prefsDir}`] : []),
     ...(cmd.extraArgs ?? []), '-cp', cmd.classpath, 'RarsProbe'];
 }
 
+// java.exe itself, never through a shell or a .bat (a JVM a grandchild would
+// escape what ends the children); no console window (windowsHide); in the
+// parent's job object on Windows (not detached: libuv's job, which kills it
+// with the parent).
+export function spawnOptions(cmd: EngineCommand, env: NodeJS.ProcessEnv): SpawnOptions {
+  return { stdio: ['pipe', 'pipe', 'pipe'], env, shell: false, windowsHide: cmd.windowsHide ?? true, detached: cmd.detached ?? false };
+}
+
 export function engineTransport(cmd: EngineCommand, env: NodeJS.ProcessEnv = process.env): Transport {
-  const child = spawn(cmd.java, engineArgs(cmd), { stdio: ['pipe', 'pipe', 'pipe'], env, windowsHide: cmd.windowsHide ?? true, detached: cmd.detached ?? false });
+  const child = spawn(cmd.java, engineArgs(cmd), spawnOptions(cmd, env)) as ChildProcessWithoutNullStreams;
   const listeners: ((m: EngineMessage) => void)[] = [];
   const exitListeners: ((info: ExitInfo) => void)[] = [];
   let stderr = '';

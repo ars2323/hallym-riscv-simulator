@@ -1,18 +1,23 @@
 /* The engine as a process of the student's PC (the MIPS edition had none):
 
    1. Closing the window ends both engines (the simulator's and the checker's).
-   2. The app killed outright (Task Manager, a crash: no goodbye) while a
-      program runs: both engines go, within 5 s.  Two things see to it: the
-      engine leaves at the end of its stdin, and on Windows the job object
-      libuv puts every child in kills it with its parent.  Control: engines
-      told to ignore the end of stdin (-Dprobe.ignoreEof=true) and started
-      outside the job object (ENGINE_DETACHED=1) stay, orphans; they are
-      killed here.
+   2. The app's main process killed outright (taskkill /F, SIGKILL: Task
+      Manager, a crash, no goodbye) while a program runs: both engines go,
+      within 5 s.  The main process is the one main.ts runs in (process.pid
+      there), the engines' parent: not always the one Playwright started --
+      the installed app on Windows ran main.ts in a child of it (CI, 2026-10-02:
+      Playwright's 5692, main.ts in 1188, the engines' parent; killing 5692
+      left 1188 and so the whole app running).  Three ways out (RarsProbe):
+      the parent's end (ProcessHandle), the end of stdin, and on Windows the
+      job object; each alone, the other two off, and the parent watch with a
+      shutdown hook that never ends (it halts).  Control: all three off, the
+      engines stay (orphans; killed here).
    3. Windows: no console window appears when the window starts its engines
       or restarts one (java.exe is a console program).  Control: started
       without windowsHide (ENGINE_WINDOWS_HIDE=0), one does.
       (tools/windows/console-windows.ps1 watches the desktop every 20 ms.)
 
+   The tests are independent: one failing does not skip the others.
    tools/engine-windows.ts measures the rest without a window: cold start,
    Korean through stdio, kill. */
 
@@ -25,7 +30,6 @@ import path from 'node:path';
 import { goneWithin, javaPids, killHard } from '../helpers/processes.ts';
 import { launch, openAndAssemble, program, root, settled, type Running } from './harness.ts';
 
-test.describe.configure({ mode: 'serial' });
 const say = (s: string) => console.log(s);
 
 async function bothEngines(r: Running): Promise<number[]> {
@@ -42,7 +46,8 @@ test('1: closing the window ends both engines', async () => {
   expect(ms, `engines ${pids.join(' ')} still running 5 s after the window closed`).not.toBeNull();
 });
 
-// The app killed while the simulator runs an endless loop; returns ms until both engines were gone, or null.
+// The app's main process killed while the simulator runs an endless loop;
+// returns ms until both engines were gone, or null.
 async function killedApp(env: Record<string, string>): Promise<{ ms: number | null; pids: number[] }> {
   const dir = mkdtempSync(path.join(tmpdir(), 'engine-trace-'));
   const trace = path.join(dir, 'trace.txt');
@@ -51,30 +56,42 @@ async function killedApp(env: Record<string, string>): Promise<{ ms: number | nu
   await openAndAssemble(r, program(r.dir, 'loop.s', 'main:\nloop: j loop\n'));
   await r.page.keyboard.press('F5');
   await expect(r.page.locator('.status')).toContainText('실행 중');
-  say(`  app ${r.app.process().pid} with engines ${pids.join(' ')}: killing the app's main process alone`);
-  killHard(r.app.process().pid!);
+  const main = await r.app.evaluate(() => ({ pid: process.pid, ppid: process.ppid }));
+  say(`  started ${r.app.process().pid}; main.ts runs in ${main.pid} (its parent ${main.ppid}), engines ${pids.join(' ')}: killing ${main.pid} alone`);
+  killHard(main.pid);
   const ms = await goneWithin(pids, 5000, say);
   // What the engines saw (their trace) and, on Windows, who their parents are: the evidence when one stays.
   say(`engine trace:\n${existsSync(trace) ? readFileSync(trace, 'utf8') : '(none written)'}`);
   if (process.platform === 'win32' && ms === null) {
     say(execFileSync('powershell.exe', ['-NoProfile', '-Command',
-      `Get-CimInstance Win32_Process -Filter "ProcessId=${pids.join(' or ProcessId=')}" | ForEach-Object { "$($_.ProcessId) parent $($_.ParentProcessId) $($_.Name)" }; `
-      + `Get-CimInstance Win32_Process -Filter "Name='HallymRISCV.exe' or Name='electron.exe'" | ForEach-Object { "$($_.ProcessId) parent $($_.ParentProcessId) $($_.Name) $($_.CommandLine)".Substring(0, [Math]::Min(200, "$($_.ProcessId) parent $($_.ParentProcessId) $($_.Name) $($_.CommandLine)".Length)) }`], { encoding: 'utf8' }));
+      `Get-CimInstance Win32_Process -Filter "ProcessId=${pids.join(' or ProcessId=')}" | ForEach-Object { "$($_.ProcessId) parent $($_.ParentProcessId) $($_.Name)" }`], { encoding: 'utf8' }));
   }
   for (const p of pids) { try { killHard(p); } catch { /* gone */ } }
+  try { killHard(r.app.process().pid!); } catch { /* gone with its child, or the same process */ }
   // Chromium's own processes outlive a killed main process for a moment and still write there.
   try { rmSync(r.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); } catch (e) { say(`  (scratch directory left: ${(e as Error).message})`); }
   return { ms, pids };
 }
 
-test('2: the app killed outright -> its engines leave by themselves', async () => {
-  const { ms, pids } = await killedApp({});
-  expect(ms, `engines ${pids.join(' ')} left running: orphans`).not.toBeNull();
-  say(`engines gone ${ms} ms after the app was killed`);
-});
+const NO_WATCH = '-Dprobe.noParentWatch=true', NO_EOF = '-Dprobe.ignoreEof=true';
+const WAYS: { name: string; env: Record<string, string>; only?: 'win32' }[] = [
+  { name: 'all three ways', env: {} },
+  { name: 'the parent watch alone', env: { ENGINE_JAVA_ARGS: NO_EOF, ENGINE_DETACHED: '1' } },
+  { name: 'the parent watch alone, a shutdown hook that never ends', env: { ENGINE_JAVA_ARGS: `${NO_EOF} -Dprobe.stuckShutdownHook=true`, ENGINE_DETACHED: '1' } },
+  { name: 'the end of stdin alone', env: { ENGINE_JAVA_ARGS: NO_WATCH, ENGINE_DETACHED: '1' } },
+  { name: 'the job object alone', env: { ENGINE_JAVA_ARGS: `${NO_WATCH} ${NO_EOF}` }, only: 'win32' },
+];
+for (const w of WAYS) {
+  test(`2: the app's main process killed outright -> its engines leave by themselves: ${w.name}`, async () => {
+    test.skip(w.only !== undefined && process.platform !== w.only, 'Windows only');
+    const { ms, pids } = await killedApp(w.env);
+    expect(ms, `engines ${pids.join(' ')} left running: orphans`).not.toBeNull();
+    say(`engines gone ${ms} ms after the main process was killed (${w.name})`);
+  });
+}
 
-test('2, negative control: engines that ignore the end of stdin are left behind', async () => {
-  const { ms } = await killedApp({ ENGINE_JAVA_ARGS: '-Dprobe.ignoreEof=true', ENGINE_DETACHED: '1' });
+test('2, negative control: none of the three ways -> the engines are left behind', async () => {
+  const { ms } = await killedApp({ ENGINE_JAVA_ARGS: `${NO_WATCH} ${NO_EOF}`, ENGINE_DETACHED: '1' });
   expect(ms).toBeNull();
 });
 

@@ -50,6 +50,12 @@ on:
         type: boolean
         default: false
 
+# A newer push to the same branch cancels the older run still going; a tag's
+# run and a run by hand are never cancelled and cancel nothing (each its own group).
+concurrency:
+  group: electron-${{ github.ref }}${{ (github.event_name != 'push' || github.ref_type == 'tag') && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: true
+
 defaults:
   run:
     working-directory: electron
@@ -79,18 +85,24 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit -p .
       - name: Unit tests
+        if: ${{ !cancelled() }}
         run: npm test
       - name: Every document's links and pictures (none broken, none unused)
+        if: ${{ !cancelled() }}
         run: node tools/check-doc-links.ts
       - name: The engine process, measured (tools/engine-windows.ts; Windows below is what it is for)
+        if: ${{ !cancelled() }}
         run: node tools/engine-windows.ts --out report
       - name: The decoder's oracle is what RARS says today
+        if: ${{ !cancelled() }}
         run: |
           node tools/gen-rars-words.ts
           git diff --exit-code tests/core/rars-words.json
       - name: The editor's keyword table is what RARS's source says
+        if: ${{ !cancelled() }}
         run: node tools/gen-op-table.ts --check
       - name: Every e2e test (a real window, xvfb)
+        if: ${{ !cancelled() }}
         env:
           ELECTRON_DISABLE_SANDBOX: '1'   # Ubuntu 24.04 runners forbid the unprivileged user namespaces Chromium's sandbox needs
         run: node tools/build-ui.ts && xvfb-run -a -s '-screen 0 2400x1400x24' npx playwright test
@@ -129,6 +141,7 @@ jobs:
       - name: Every e2e test at 1280, 1093, 1024 and 910 (tools/e2e-widths.ts)
         run: node tools/build-ui.ts && xvfb-run -a -s '-screen 0 2400x1400x24' node tools/e2e-widths.ts
       - name: Every e2e test with 1920x1040 as every test's window
+        if: ${{ !cancelled() }}
         run: SPIM_E2E_SIZE=1920x1040 xvfb-run -a -s '-screen 0 2400x1400x24' npx playwright test
 
   windows:
@@ -173,17 +186,22 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit -p .
       - name: Unit tests
+        if: ${{ !cancelled() }}
         run: npm test
       - name: Every document's links and pictures (none broken, none unused)
+        if: ${{ !cancelled() }}
         run: node tools/check-doc-links.ts
 
       - name: The engine process on Windows, measured with the JDK (tools/engine-windows.ts)
+        if: ${{ !cancelled() }}
         run: node tools/engine-windows.ts --out report/engine-jdk
 
       - name: Package (NSIS installer, the jlink runtime, RARS)
+        if: ${{ !cancelled() }}
         run: node tools/package.ts
 
       - name: The package is one file, the installer; its size and what it is made of
+        if: ${{ !cancelled() && hashFiles('electron/dist/*-setup.exe') != '' }}
         shell: pwsh
         run: |
           $files = @(Get-ChildItem dist -File | Where-Object { $_.Extension -in '.exe', '.zip', '.msi' })
@@ -196,14 +214,17 @@ jobs:
           Write-Host "PASS  one file: $($files[0].Name)"
 
       - name: Install with /S (silent, per user, starts nothing)
+        if: ${{ !cancelled() && hashFiles('electron/dist/*-setup.exe') != '' }}
         shell: pwsh
         run: tools/windows/install-silent.ps1 -Setup (Get-Item dist/*-setup.exe).FullName -Report report
 
       - name: The engine process measured again, with the installed Java runtime
+        if: ${{ !cancelled() && hashFiles('electron/report/installed.txt') != '' }}
         shell: pwsh
         run: node tools/engine-windows.ts --java "$env:LOCALAPPDATA\Programs\Hallym RISC-V\resources\engine\runtime\bin\java.exe" --out report/engine-installed
 
       - name: e2e against the installed app
+        if: ${{ !cancelled() && hashFiles('electron/report/installed.txt') != '' }}
         timeout-minutes: 30
         shell: pwsh
         run: |
@@ -211,6 +232,7 @@ jobs:
           npx playwright test
 
       - name: e2e against the installed app, 1920x1040 as every test's window
+        if: ${{ !cancelled() && hashFiles('electron/report/installed.txt') != '' }}
         timeout-minutes: 30
         shell: pwsh
         run: |
@@ -222,6 +244,7 @@ jobs:
       # (tests/e2e/ime.e2e.ts, in the steps above, is the check that counts:
       # the IME's events through CDP).
       - name: Korean IME on the runner (tools/windows/korean-ime.ps1)
+        if: ${{ !cancelled() && hashFiles('electron/report/installed.txt') != '' }}
         id: koime
         continue-on-error: true
         timeout-minutes: 20

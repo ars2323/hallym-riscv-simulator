@@ -32,16 +32,23 @@ SHA-256 mean anything.
 Measured on the Windows runner, each with a negative control that fails:
 
 - **No console window.** `java.exe` is a console program; started from a window it would get a black console
-  window at every start and restart. It is started with `windowsHide`; a watcher that lists every visible window
+  window at every start and restart. It is started with `windowsHide` (`src/sim/transport.ts`, `spawnOptions`); a watcher that lists every visible window
   every 20 ms (`tools/windows/console-windows.ps1`) sees none. Control: `ENGINE_WINDOWS_HIDE=0` shows one.
 - **Killing.** Windows has no signals: `kill('SIGKILL')` is `TerminateProcess`; the exit is reported in about
   10 ms and the process is gone. Control: a polite end (closing stdin) against an engine that ignores it leaves
   it running.
-- **No orphans.** The engine leaves when the process that started it is gone (`-Dhallym.parent`, Java's
-  `ProcessHandle.onExit`) or when its stdin ends. Both are needed: an Electron main process killed outright on
-  Windows left both engines running before the first was added. (A Node parent's children are also in libuv's
-  job object, which kills them with it.) Control: an engine that ignores both, started outside the job object,
-  stays.
+- **No orphans.** The app killed outright (Task Manager, a crash: `taskkill /F` on its main process, no goodbye)
+  while a program runs: both engines (the simulator's and the checker's, two `java.exe`, children of the main
+  process, started directly -- no shell, no `.bat`, so no grandchild) leave by themselves. Three ways out,
+  whichever comes first: the engine watches its parent (`-Dparent.pid`, Java's `ProcessHandle.onExit`, in
+  java.base, and leaves with `Runtime.halt`, which no shutdown hook can hold up); it leaves at the end of its
+  stdin; and on Windows the job object libuv puts every non-detached child of the main process in
+  (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, its handle not inherited) is killed by the kernel when the main
+  process's handles close. The e2e test kills the process `main.ts` runs in, the engines' parent -- not the
+  one Playwright started: with the installed app on Windows that was its parent, and killing it left the
+  whole app running (CI, 2026-10-02: Playwright's process 5692, main.ts and both engines' parent 1188). Each
+  way is checked alone, the other two off; control: all three off, the engines stay
+  (`tests/e2e/engine-process.e2e.ts`, `tools/engine-windows.ts`).
 - **Korean through stdio.** Every stream is UTF-8 whatever the code page (`-Dfile.encoding=UTF-8` and the
   stdout/stderr encodings). Control: `-Dfile.encoding=COMPAT` (the code page) garbles a Korean round trip.
 - **Cold start**: a fresh engine ready in about 0.22–0.24 s (median of ten), the first assemble answered in

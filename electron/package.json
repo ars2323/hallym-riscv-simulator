@@ -1,6 +1,6 @@
 {
   "name": "hallym-riscv-electron",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "The Hallym RISC-V simulator (RARS engine in a JVM) as an Electron app",
   "license": "UNLICENSED",

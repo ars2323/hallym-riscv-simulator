@@ -20,17 +20,20 @@
       stdin, a polite end) against an engine that does not cooperate
       (-Dprobe.ignoreEof=true) must leave it alive.
    4. Orphan: a parent process that started an engine dies at once
-      (TerminateProcess / SIGKILL, no goodbye): the engine goes too -- it
-      reads the end of its stdin, and on Windows libuv's job object (every
-      child of a Node or Electron process is in one, killed when the parent
-      dies) ends it as well.  Control: an engine that ignores the end of
-      stdin (-Dprobe.ignoreEof=true), started outside the job object
-      (detached), must stay (and is then killed here).
+      (TerminateProcess / SIGKILL, no goodbye): the engine goes too.  Three
+      ways out (RarsProbe): its parent's end (ProcessHandle, -Dparent.pid),
+      the end of its stdin, and on Windows libuv's job object (every
+      non-detached child of a Node or Electron process is in one, killed when
+      the parent dies).  Each is checked alone, the other two off
+      (-Dprobe.noParentWatch=true, -Dprobe.ignoreEof=true, detached), and
+      the parent watch once more with a shutdown hook that never ends (it
+      halts).  Control: all three off, the engine must stay (an orphan; then
+      killed here).
 
    The console window (does a black box flash up when the window starts an
-   engine?) needs the app's window: tests/e2e/windows.e2e.ts. */
+   engine?) needs the app's window: tests/e2e/engine-process.e2e.ts. */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -46,6 +49,13 @@ const base: EngineCommand = { ...engine(), ...(opt.java ? { java: opt.java } : {
 const T0 = Date.now();
 const say = (s: string) => console.log(`[${((Date.now() - T0) / 1000).toFixed(1)} s] ${s}`);
 const results: Record<string, unknown> = { platform: `${process.platform} ${process.arch}`, java: base.java };
+// Which Java (the jlink runtime's: ProcessHandle.onExit of a process not our child needs JDK 10+, JDK-8176272).
+{
+  const v = spawnSync(base.java, ['-XshowSettings:properties', '-version'], { encoding: 'utf8' });
+  const prop = (k: string) => new RegExp(`^\\s*${k.replace(/\./g, '\\.')} = (.*)$`, 'm').exec(v.stderr)?.[1]?.trim() ?? '?';
+  results.javaVersion = `${prop('java.vendor')} ${prop('java.runtime.version')}`;
+  say(`java: ${base.java}: ${results.javaVersion}`);
+}
 let failed = 0;
 const verdict = (name: string, ok: boolean, detail: string) => {
   say(`${ok ? 'PASS' : 'FAIL'}  ${name}: ${detail}`);
@@ -211,12 +221,23 @@ async function orphan(extraArgs: string[], detached = false): Promise<{ enginePi
   return { enginePid, goneMs };
 }
 {
-  const o = await orphan([]);
-  verdict('the parent dies: the engine goes too', o.goneMs !== null, `engine gone ${o.goneMs} ms after its parent was killed`);
-  const c = await orphan(['-Dprobe.ignoreEof=true'], true);
-  verdict('  control: an engine that ignores the end of stdin, outside the job object, stays', c.goneMs === null, c.goneMs === null ? 'still running after 5 s (an orphan; killed now)' : `gone after ${c.goneMs} ms`);
-  if (alive(c.enginePid)) killHard(c.enginePid);
-  results.orphan = { goneMs: o.goneMs, controlStayed: c.goneMs === null };
+  const NO_WATCH = '-Dprobe.noParentWatch=true', NO_EOF = '-Dprobe.ignoreEof=true';
+  const cases: { name: string; args: string[]; detached: boolean; stays?: true }[] = [
+    { name: 'all three ways', args: [], detached: false },
+    { name: 'the parent watch alone', args: [NO_EOF], detached: true },
+    { name: 'the parent watch alone, a shutdown hook that never ends', args: [NO_EOF, '-Dprobe.stuckShutdownHook=true'], detached: true },
+    { name: 'the end of stdin alone', args: [NO_WATCH], detached: true },
+    ...(process.platform === 'win32' ? [{ name: 'the job object alone', args: [NO_WATCH, NO_EOF], detached: false }] : []),
+    { name: 'control: none of them', args: [NO_WATCH, NO_EOF], detached: true, stays: true },
+  ];
+  results.orphan = {};
+  for (const c of cases) {
+    const o = await orphan(c.args, c.detached);
+    if (c.stays) verdict(`  ${c.name}: the engine stays`, o.goneMs === null, o.goneMs === null ? 'still running after 5 s (an orphan; killed now)' : `gone after ${o.goneMs} ms`);
+    else verdict(`the parent killed, ${c.name}: the engine goes`, o.goneMs !== null, o.goneMs === null ? 'still running after 5 s' : `gone ${o.goneMs} ms after its parent was killed`);
+    if (alive(o.enginePid)) killHard(o.enginePid);
+    (results.orphan as Record<string, number | null>)[c.name] = o.goneMs;
+  }
 }
 
 results.args = engineArgs(base);

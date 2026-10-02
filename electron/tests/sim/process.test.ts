@@ -10,6 +10,8 @@
    5. An engine that cannot start (no java), that dies again and again, or
       that speaks another protocol is "dead": calls fail at once, with why.
    6. stop() kills an engine that does not answer (a fake engine here).
+   7. How java is started: java itself (no shell), no console window, in
+      the parent's job object, told the parent's pid.
    (The MIPS edition's process.test.ts, for the JVM engine.) */
 
 import assert from 'node:assert/strict';
@@ -17,7 +19,7 @@ import { after, before, describe, test } from 'node:test';
 
 import { CRASH_MESSAGE, EngineCrashed, EngineDead, Simulator, type CrashReport, type EngineState } from '../../src/sim/host.ts';
 import { PROTOCOL } from '../../src/sim/protocol.ts';
-import { engineTransport, type ExitInfo, type Transport } from '../../src/sim/transport.ts';
+import { engineArgs, engineTransport, spawnOptions, type ExitInfo, type Transport } from '../../src/sim/transport.ts';
 import { startEngine } from '../helpers/engine.ts';
 
 const LOOP = 'main:\nloop: j loop\n';
@@ -207,4 +209,16 @@ test('6: stop() kills an engine that does not answer, and a fresh one starts', a
   await sim.whenReady();
   assert.equal(sim.state, 'ready');
   sim.close();
+});
+
+// tests/e2e/engine-process.e2e.ts sees the console window and the orphans on
+// Windows; this says the same of the options on every platform (the mutants
+// run on Linux).
+test('7: java itself, no console window, not detached, told the parent\'s pid', () => {
+  const cmd = { java: 'java', classpath: 'x' };
+  const o = spawnOptions(cmd, {});
+  assert.equal(o.shell, false);
+  assert.equal(o.windowsHide, true);
+  assert.equal(o.detached, false);
+  assert.ok(engineArgs(cmd).includes(`-Dparent.pid=${process.pid}`));
 });

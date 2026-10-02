@@ -19,7 +19,8 @@
    Each mutant changes one thing in one file -- the text `find` must occur
    exactly once -- in a copy of src/, tests/ and tools/ in a temporary
    directory, <tmp>/electron (node_modules/ is linked, not copied, and the
-   repository's probe/ -- the engine's classes -- is linked at <tmp>/probe),
+   repository's probe/ -- the engine's classes -- is linked at <tmp>/probe;
+   a mutant in the engine, ../probe/src, gets its own probe/ there, built),
    and runs the tests named for it there.  (The list: the Hallym MIPS
    edition's mutants that apply to the code the two editions share as it
    is, and this edition's own -- the engine boundary, the decoder's six
@@ -48,7 +49,7 @@
 */
 
 import { execFileSync, spawn } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -62,7 +63,7 @@ interface Mutant {
   replace: string;
   tests: string[];
   what: string;
-  rebuild?: boolean; // the mutant is in native/src: build the addon again
+  rebuild?: boolean; // the mutant is in the engine (../probe/src): the copy gets its own probe/, its classes built again
 }
 
 const MUTANTS: Mutant[] = [
@@ -105,6 +106,14 @@ const MUTANTS: Mutant[] = [
     find: "  { name: 'lucide-LICENSE.txt', title: 'Lucide icons — ISC License' },\n", replace: "", tests: ["tests/e2e/settings.e2e.ts"] },
   { module: "window", file: "src/renderer/app/app.ts", what: "Esc waits out a slow run's second",
     find: "slow = { cancel: () => { cancelled = true; wake?.(); } };", replace: "slow = { cancel: () => { cancelled = true; } };", tests: ["tests/e2e/panels.e2e.ts"] },
+  { module: "engine", file: "../probe/src/RarsProbe.java", what: "the parent's end not watched", rebuild: true,
+    find: "ph.get().onExit().thenRun(", replace: "new java.util.concurrent.CompletableFuture<Void>().thenRun(", tests: ["tests/e2e/engine-process.e2e.ts"] },
+  { module: "engine", file: "../probe/src/RarsProbe.java", what: "exit, not halt, when the parent is gone", rebuild: true,
+    find: "exited: leaving\"); Runtime.getRuntime().halt(0); });", replace: "exited: leaving\"); System.exit(0); });", tests: ["tests/e2e/engine-process.e2e.ts"] },
+  { module: "engine", file: "src/sim/transport.ts", what: "java started without windowsHide (a console window)",
+    find: "windowsHide: cmd.windowsHide ?? true", replace: "windowsHide: cmd.windowsHide ?? false", tests: ["tests/sim/process.test.ts"] },
+  { module: "engine", file: "src/sim/transport.ts", what: "the engine not told its parent",
+    find: "    `-Dparent.pid=${process.pid}`,\n", replace: "", tests: ["tests/sim/process.test.ts", "tests/e2e/engine-process.e2e.ts"] },
   { module: "window", file: "src/renderer/app/panels/data.ts", what: "Data addresses without 0x",
     find: "code(hex32(base16), 'daddr')", replace: "code(hex32(base16).slice(2), 'daddr')", tests: ["tests/e2e/panels.e2e.ts"] },
   { module: "window", file: "src/renderer/app/panels/console.ts", what: "Console folded at the start",
@@ -364,13 +373,15 @@ const MUTANTS: Mutant[] = [
     find: "...['funct7', 'rs2', 'rs1', 'funct3', 'rd', 'opcode'].map(", replace: "...['opcode', 'rs', 'rt', 'rd'].map(", tests: ["tests/e2e/tutorial.e2e.ts"] },
 ];
 
-function copyTree(dir: string, _linkBuild: boolean): void {
+function copyTree(dir: string, linkProbe: boolean): void {
   for (const d of ['src', 'tests', 'tools']) cpSync(path.join(root, d), path.join(dir, d), { recursive: true });
   for (const f of ['package.json', 'tsconfig.json', 'playwright.config.ts']) cpSync(path.join(root, f), path.join(dir, f));
   cpSync(path.join(root, '..', 'NOTICE'), path.join(dir, '..', 'NOTICE')); // the repository's (About lists it)
   symlinkSync(path.join(root, 'node_modules'), path.join(dir, 'node_modules'));
   // The engine's classes (probe/build/classes), beside the copy as probe/ is beside electron/.
-  symlinkSync(path.join(root, '..', 'probe'), path.join(dir, '..', 'probe'));
+  // A mutant in the engine gets its own copy of probe/src, built below.
+  if (linkProbe) symlinkSync(path.join(root, '..', 'probe'), path.join(dir, '..', 'probe'));
+  else cpSync(path.join(root, '..', 'probe', 'src'), path.join(dir, '..', 'probe', 'src'), { recursive: true });
 }
 
 // ---- which mutants ------------------------------------------------------------------------
@@ -378,6 +389,8 @@ function copyTree(dir: string, _linkBuild: boolean): void {
 const repo = path.join(root, '..');
 const BASELINE = path.join(root, 'tools/mutants-baseline.json');
 const keyOf = (m: Mutant): string => `${m.module}: ${m.what}`;
+// A mutant's or test's path (from electron/) as git names it (from the repository).
+const inRepo = (f: string): string => path.posix.normalize(`electron/${f}`);
 
 interface Baseline { sha: string; date: string; killed: number; run?: string; mutants: string[] }
 
@@ -449,8 +462,8 @@ function select(repoDir: string, baselineFile: string): Selection {
   for (const m of MUTANTS) {
     const why: string[] = [];
     if (!known.has(keyOf(m))) why.push('new since the baseline');
-    if (changed.has(`electron/${m.file}`)) why.push(`file ${m.file} changed`);
-    for (const t of m.tests) if (changed.has(`electron/${t}`)) why.push(`test ${t} changed`);
+    if (changed.has(inRepo(m.file))) why.push(`file ${m.file} changed`);
+    for (const t of m.tests) if (changed.has(inRepo(t))) why.push(`test ${t} changed`);
     if (why.length) run.push({ m, why }); else skipped.push(m);
   }
   return { all: false, baseline, changed, run, skipped };
@@ -498,8 +511,11 @@ async function runOne(m: Mutant, display: number | null): Promise<Result> {
     if (count !== 1) return result('not applied', `found ${count} times`);
     writeFileSync(file, text.replace(m.find, m.replace));
     if (m.rebuild) {
-      const b = await run(path.join(root, 'node_modules/.bin/node-gyp'), ['rebuild', '--directory', path.join(dir, 'native')], dir, 900000);
-      if (b.status !== 0) return result('error', 'the addon did not build');
+      // As probe/run.sh build does.
+      const probe = path.join(dir, '..', 'probe'), jar = process.env.RARS_JAR ?? path.join(process.env.RARS_HOME ?? path.join(os.homedir(), '.cache', 'hallym-riscv', 'rars'), 'rars-src.jar');
+      const srcs = readdirSync(path.join(probe, 'src')).filter((f) => f.endsWith('.java')).map((f) => path.join(probe, 'src', f));
+      const b = await run('javac', ['--release', '11', '-cp', jar, '-d', path.join(probe, 'build', 'classes'), ...srcs], dir, 300000);
+      if (b.status !== 0) return result('error', 'the engine did not build');
     }
     // Unit tests (node --test) first, then e2e ones (Playwright): a list may name both.
     const unit = m.tests.filter((t) => !t.endsWith('.e2e.ts')), e2e = m.tests.filter((t) => t.endsWith('.e2e.ts'));
@@ -549,7 +565,7 @@ async function control(list: Mutant[], display: number | null): Promise<string |
   }
 }
 
-// `jobs` at a time; those that rebuild the addon one at a time, after.
+// `jobs` at a time; those that rebuild the engine one at a time, after.
 async function runAll(list: Mutant[], jobs: number, displays: boolean): Promise<Result[]> {
   const results: Result[] = [];
   const say = (r: Result) => console.log(`${r.result.padEnd(12)} ${r.key}${r.by ? `  <-  ${r.by}` : ''}  (${r.seconds} s)`);
@@ -694,7 +710,7 @@ if (opt.changed) {
     console.log(`skipped      ${sel.skipped.length}: file and tests unchanged since ${b.sha.slice(0, 7)}, killed there`);
     for (const m of sel.skipped) console.log(`  skip       ${keyOf(m)}  (${[m.file, ...m.tests].join(', ')})`);
     // Checked again, now, against the same change set: a skipped mutant with a changed file is a bug here.
-    const leak = sel.skipped.filter((m) => [m.file, ...m.tests].some((f) => sel.changed.has(`electron/${f}`)));
+    const leak = sel.skipped.filter((m) => [m.file, ...m.tests].some((f) => sel.changed.has(inRepo(f))));
     if (leak.length) {
       for (const m of leak) console.error(`FAIL         skipped although changed: ${keyOf(m)}`);
       process.exit(1);
@@ -707,7 +723,7 @@ if (opt.changed) {
 if (opt.shard) {
   const [i, n] = opt.shard.split('/').map(Number);
   if (!(n >= 1 && i >= 1 && i <= n)) throw new Error(`--shard ${opt.shard}: I/N with 1 <= I <= N`);
-  // Round-robin, the addon-rebuilding ones apart, so each part gets its share of both.
+  // Round-robin, the engine-rebuilding ones apart, so each part gets its share of both.
   const deal = (xs: Mutant[]) => xs.filter((_, k) => k % n === i - 1);
   list = [...deal(list.filter((m) => !m.rebuild)), ...deal(list.filter((m) => m.rebuild))];
   console.log(`shard        ${i}/${n}: ${list.length} mutants`);

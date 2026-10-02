@@ -124,9 +124,15 @@ test('slow run switched to Instant goes on at full speed; Instant switched to sl
 
 test('Console: open from the start; what the program prints is in the body only', async () => {
   const { page } = r;
+  // Read once, not waited for: "from the start" is before anything could open it
+  // (a retrying expect let a Console folded at the start through when something opened it in time).
+  const open = () => page.locator('.console').evaluate((e) => e.classList.contains('open'));
+  expect(await open(), 'the Console open at the start').toBe(true);
   await openAndAssemble(r, program(r.dir, 'hi.s',
     '  .data\ns: .asciz "Hello World"\n  .text\nmain:\n  la a0, s\n  li a7, 4\n  ecall\n  li a7, 10\n  ecall\n'));
-  await expect(page.locator('.console')).toHaveClass(/open/);
+  expect(await open(), 'the Console open after assembling, before any output').toBe(true);
+  // Nothing but the program in it: no word of the JVM's (java.util.prefs once logged its new folder there).
+  expect(await page.locator('.clog').textContent(), 'the Console empty before the program prints').toBe('');
   await page.keyboard.press('F5');
   await settled(page);
   await expect(page.locator('.clog')).toHaveText('Hello World');

@@ -29,6 +29,12 @@ public class RarsProbe {
     // ---- protocol channel: the real fd 1, never touched by RARS ----
     static final PrintStream proto = new PrintStream(new FileOutputStream(FileDescriptor.out), false, StandardCharsets.UTF_8);
 
+    // java.util.prefs logs to stderr -- the student's Console -- when it creates the (per run, so
+    // every time new) preferences directory: "INFO: Created user preferences directory.", which
+    // opened the Console at a random moment of the start.  RARS's settings are not the student's
+    // business: its logger is off.  (A field: a logger only referenced weakly loses its level.)
+    static final java.util.logging.Logger PREFS_LOG = java.util.logging.Logger.getLogger("java.util.prefs");
+
     // -Dprobe.trace=<file>: what the engine saw of its end (the orphan checks read it when one fails).
     static void trace(String what) {
         String f = System.getProperty("probe.trace");
@@ -152,6 +158,7 @@ public class RarsProbe {
         System.setOut(new NonClosingPrintStream(new ConsoleOut("out")));
         System.setErr(new NonClosingPrintStream(new ConsoleOut("err")));
 
+        PREFS_LOG.setLevel(java.util.logging.Level.OFF);
         Globals.initialize();
         // Unblock a program waiting for console input when Stop is requested.
         Simulator.getInstance().addStopListener(s -> consoleIn.cancel());
@@ -160,18 +167,27 @@ public class RarsProbe {
             if (arg instanceof SimulatorNotice && ((SimulatorNotice) arg).getAction() == SimulatorNotice.SIMULATOR_STOP)
                 finish((SimulatorNotice) arg);
         });
-        // The process that started us (-Dhallym.parent=<pid>): when it is gone, so are we.  The end of
-        // stdin says the same, but not always: on Windows an Electron main process killed outright
-        // left both engines running (tests/e2e/engine-process.e2e.ts, the installed app), its pipes
-        // apparently still held elsewhere.  -Dprobe.ignoreEof=true (the orphan checks' negative
-        // control) ignores both.
-        String parent = System.getProperty("hallym.parent");
-        if (parent != null && !Boolean.getBoolean("probe.ignoreEof")) {
+        // Three ways out when whoever started us is gone without a word (an app killed outright: Task
+        // Manager, a crash), whichever comes first -- an engine left behind piles up on a shared lab PC:
+        //   1. here: the parent's own end (-Dparent.pid=<pid>, ProcessHandle, java.base);
+        //   2. the end of stdin, below;
+        //   3. on Windows, outside this program: the job object libuv puts a Node/Electron
+        //      process's children in, killed when the parent's handle to it closes.
+        // On Windows 2 is not certain (a copy of the pipe's write end held anywhere and no end of
+        // file ever comes) and 3 not for a child started detached, so 1 does not rely on either.
+        // halt, not exit: nothing (a shutdown hook) may keep an orphan alive.  Switches for the
+        // checks that take each way alone (tests/e2e/engine-process.e2e.ts, tools/engine-windows.ts):
+        // -Dprobe.noParentWatch=true turns 1 off, -Dprobe.ignoreEof=true 2, a detached start 3;
+        // -Dprobe.stuckShutdownHook=true adds a shutdown hook that never ends (halt must not wait).
+        if (Boolean.getBoolean("probe.stuckShutdownHook"))
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> { try { Thread.sleep(Long.MAX_VALUE); } catch (InterruptedException e) { /* ends */ } }));
+        String parent = System.getProperty("parent.pid");
+        if (parent != null && !Boolean.getBoolean("probe.noParentWatch")) {
             try {
                 java.util.Optional<ProcessHandle> ph = ProcessHandle.of(Long.parseLong(parent));
                 trace("watching parent " + parent + (ph.isPresent() ? "" : ": already gone"));
-                if (ph.isEmpty()) System.exit(0);
-                ph.get().onExit().thenRun(() -> { trace("parent " + parent + " exited: leaving"); System.exit(0); });
+                if (ph.isEmpty()) Runtime.getRuntime().halt(0);
+                ph.get().onExit().thenRun(() -> { trace("parent " + parent + " exited: leaving"); Runtime.getRuntime().halt(0); });
             } catch (NumberFormatException e) { /* no such pid: nothing to watch */ }
         }
         send("{\"ev\":\"ready\",\"protocol\":" + PROTOCOL + ",\"rars\":" + Json.str(Globals.version) + "}");
@@ -194,9 +210,8 @@ public class RarsProbe {
             }
             if ("quit".equals(req.get("cmd"))) { System.exit(0); }
         }
-        // stdin ended: whoever started us is gone (on Windows a dead parent leaves no signal, only
-        // this end of file), so we go too -- an engine left behind would pile up on a shared lab PC.
-        // -Dprobe.ignoreEof=true (negative control for the orphan check) stays instead.
+        // stdin ended: whoever started us is gone, so we go too (way 2 above).
+        // -Dprobe.ignoreEof=true stays instead.
         trace("end of stdin" + (Boolean.getBoolean("probe.ignoreEof") ? ", ignored" : ": leaving"));
         if (Boolean.getBoolean("probe.ignoreEof")) Thread.sleep(Long.MAX_VALUE);
         System.exit(0);
