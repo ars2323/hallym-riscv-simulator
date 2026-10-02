@@ -64,6 +64,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: ImageMagick (the first screen's measurements read the screen with `import`)
+        run: sudo apt-get update -q && sudo apt-get install -y -q imagemagick
       - name: The engine (the SessionStart hook every Claude session runs)
         working-directory: .
         run: |
@@ -110,6 +112,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: ImageMagick (the first screen's measurements read the screen with `import`)
+        run: sudo apt-get update -q && sudo apt-get install -y -q imagemagick
       - name: The engine
         working-directory: .
         run: |
@@ -294,7 +298,7 @@ jobs:
           name: HallymRISCV-windows
           path: electron/new
 
-      - name: The latest published release's installer (none: the first release)
+      - name: The latest published release's installer (none before the first release)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -312,7 +316,7 @@ jobs:
           "$tag" | Set-Content released/tag.txt
           Get-ChildItem released | ForEach-Object { $_.Name }
 
-      - name: This build over the latest release (or alone, then over itself)
+      - name: This build over the latest release, or alone and then over itself
         shell: pwsh
         run: |
           $old = (Get-Content released/tag.txt).Trim()

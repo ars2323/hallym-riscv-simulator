@@ -42,6 +42,10 @@ export interface EngineCommand {
   // up at every start and restart.  Hidden unless false (ENGINE_WINDOWS_HIDE=0,
   // the negative control of tests/e2e/windows.e2e.ts).
   windowsHide?: boolean;
+  // Outside this process's Windows job object (libuv puts every child in one
+  // that kills it when this process dies).  Only the negative control of the
+  // orphan checks sets it (ENGINE_DETACHED=1): an engine left to itself.
+  detached?: boolean;
 }
 
 const STDERR_KEPT = 8192;
@@ -61,7 +65,7 @@ export function engineArgs(cmd: EngineCommand): string[] {
 }
 
 export function engineTransport(cmd: EngineCommand, env: NodeJS.ProcessEnv = process.env): Transport {
-  const child = spawn(cmd.java, engineArgs(cmd), { stdio: ['pipe', 'pipe', 'pipe'], env, windowsHide: cmd.windowsHide ?? true });
+  const child = spawn(cmd.java, engineArgs(cmd), { stdio: ['pipe', 'pipe', 'pipe'], env, windowsHide: cmd.windowsHide ?? true, detached: cmd.detached ?? false });
   const listeners: ((m: EngineMessage) => void)[] = [];
   const exitListeners: ((info: ExitInfo) => void)[] = [];
   let stderr = '';

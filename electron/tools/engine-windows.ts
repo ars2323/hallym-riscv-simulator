@@ -20,9 +20,12 @@
       stdin, a polite end) against an engine that does not cooperate
       (-Dprobe.ignoreEof=true) must leave it alive.
    4. Orphan: a parent process that started an engine dies at once
-      (TerminateProcess / SIGKILL, no goodbye): the engine leaves by itself
-      (it reads the end of its stdin).  Control: -Dprobe.ignoreEof=true must
-      stay (and is then killed here).
+      (TerminateProcess / SIGKILL, no goodbye): the engine goes too -- it
+      reads the end of its stdin, and on Windows libuv's job object (every
+      child of a Node or Electron process is in one, killed when the parent
+      dies) ends it as well.  Control: an engine that ignores the end of
+      stdin (-Dprobe.ignoreEof=true), started outside the job object
+      (detached), must stay (and is then killed here).
 
    The console window (does a black box flash up when the window starts an
    engine?) needs the app's window: tests/e2e/windows.e2e.ts. */
@@ -179,12 +182,12 @@ async function busy(extraArgs: string[] = []): Promise<Engine> {
 }
 
 // ---- 4. orphan: the parent dies, the engine must go by itself
-async function orphan(extraArgs: string[]): Promise<{ enginePid: number; goneMs: number | null }> {
+async function orphan(extraArgs: string[], detached = false): Promise<{ enginePid: number; goneMs: number | null }> {
   // A parent like the app's main process: starts an engine through the same
   // transport, runs an endless loop on it, prints the engine's pid, waits.
   const child = `
     import { engineTransport } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dirname, '../src/sim/transport.ts')).href)};
-    const t = engineTransport(${JSON.stringify({ ...base, extraArgs: [...(base.extraArgs ?? []), ...extraArgs] })});
+    const t = engineTransport(${JSON.stringify({ ...base, extraArgs: [...(base.extraArgs ?? []), ...extraArgs], detached })});
     t.onMessage((m) => {
       if (m.ev === 'ready') t.send({ id: 1, cmd: 'assemble', source: 'main:\\nloop: j loop\\n' });
       if (m.id === 1) { t.send({ id: 2, cmd: 'run' }); setTimeout(() => console.log('ENGINE ' + t.pid), 300); }
@@ -210,8 +213,8 @@ async function orphan(extraArgs: string[]): Promise<{ enginePid: number; goneMs:
 {
   const o = await orphan([]);
   verdict('the parent dies: the engine goes too', o.goneMs !== null, `engine gone ${o.goneMs} ms after its parent was killed`);
-  const c = await orphan(['-Dprobe.ignoreEof=true']);
-  verdict('  control: an engine that ignores the end of stdin stays', c.goneMs === null, c.goneMs === null ? 'still running after 5 s (an orphan; killed now)' : `gone after ${c.goneMs} ms`);
+  const c = await orphan(['-Dprobe.ignoreEof=true'], true);
+  verdict('  control: an engine that ignores the end of stdin, outside the job object, stays', c.goneMs === null, c.goneMs === null ? 'still running after 5 s (an orphan; killed now)' : `gone after ${c.goneMs} ms`);
   if (alive(c.enginePid)) killHard(c.enginePid);
   results.orphan = { goneMs: o.goneMs, controlStayed: c.goneMs === null };
 }

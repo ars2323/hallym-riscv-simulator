@@ -2,9 +2,12 @@
 
    1. Closing the window ends both engines (the simulator's and the checker's).
    2. The app killed outright (Task Manager, a crash: no goodbye) while a
-      program runs: both engines leave by themselves, within 5 s -- they read
-      the end of their stdin.  Control: engines told to ignore it
-      (-Dprobe.ignoreEof=true) stay, orphans; they are killed here.
+      program runs: both engines go, within 5 s.  Two things see to it: the
+      engine leaves at the end of its stdin, and on Windows the job object
+      libuv puts every child in kills it with its parent.  Control: engines
+      told to ignore the end of stdin (-Dprobe.ignoreEof=true) and started
+      outside the job object (ENGINE_DETACHED=1) stay, orphans; they are
+      killed here.
    3. Windows: no console window appears when the window starts its engines
       or restarts one (java.exe is a console program).  Control: started
       without windowsHide (ENGINE_WINDOWS_HIDE=0), one does.
@@ -61,7 +64,7 @@ test('2: the app killed outright -> its engines leave by themselves', async () =
 });
 
 test('2, negative control: engines that ignore the end of stdin are left behind', async () => {
-  const { ms } = await killedApp({ ENGINE_JAVA_ARGS: '-Dprobe.ignoreEof=true' });
+  const { ms } = await killedApp({ ENGINE_JAVA_ARGS: '-Dprobe.ignoreEof=true', ENGINE_DETACHED: '1' });
   expect(ms).toBeNull();
 });
 
