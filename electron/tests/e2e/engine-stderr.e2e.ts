@@ -25,7 +25,8 @@ import { javaPids, killHard } from '../helpers/processes.ts';
 import { launch, openAndAssemble, program, settled, type Running } from './harness.ts';
 
 let r: Running;
-test.afterEach(async () => { await r.close(); });
+let opened: Running | null = null; // each test opens its own; a skipped one opens none
+test.afterEach(async () => { const o = opened; opened = null; await o?.close(); });
 
 // This run's folder (main.ts: <SPIM_USER_DATA>/run-<pid>-<time>).
 function runDir(): string {
@@ -72,7 +73,7 @@ async function consoleUntouched(): Promise<void> {
 const QUIET = 'main:\n  li a7, 10\n  ecall\n';
 
 test("the program's own fd 2 is in the Console", async () => {
-  r = await launch();
+  r = opened = await launch();
   await openAndAssemble(r, program(r.dir, 'fd2.s',
     '  .data\nm: .ascii "to-fd2"\n  .text\nmain:\n  li a0, 2\n  la a1, m\n  li a2, 6\n  li a7, 64\n  ecall\n  li a7, 10\n  ecall\n'));
   await r.page.keyboard.press('F5');
@@ -81,7 +82,11 @@ test("the program's own fd 2 is in the Console", async () => {
 });
 
 test("a new settings folder: java.util.prefs' line goes to the log, not the Console", async () => {
-  r = await launch();
+  // On Windows java.util.prefs keeps settings in the registry (HKCU\Software\JavaSoft\Prefs), not
+  // in java.util.prefs.userRoot: no folder, no "Created" line (CI, 5a90f3c: no folder in 15 s).
+  // JAVA_TOOL_OPTIONS below is the noise there; the mutants run this one on Linux.
+  test.skip(process.platform === 'win32', 'java.util.prefs is the registry on Windows');
+  r = opened = await launch();
   await openAndAssemble(r, program(r.dir, 'q.s', QUIET));
   const prefs = path.join(runDir(), 'rars-prefs-main');
   await restartMain(() => rmSync(prefs, { recursive: true, force: true }));
@@ -92,7 +97,7 @@ test("a new settings folder: java.util.prefs' line goes to the log, not the Cons
 });
 
 test("JAVA_TOOL_OPTIONS set (a company Java): the launcher's line goes to the log, not the Console", async () => {
-  r = await launch(undefined, { env: { JAVA_TOOL_OPTIONS: '-Dhallym.noise=1' } });
+  r = opened = await launch(undefined, { env: { JAVA_TOOL_OPTIONS: '-Dhallym.noise=1' } });
   await openAndAssemble(r, program(r.dir, 'q.s', QUIET));
   await restartMain();
   await until('the launcher\'s line in the log', logHas('Picked up JAVA_TOOL_OPTIONS'));

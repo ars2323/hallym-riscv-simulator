@@ -177,6 +177,13 @@ test('the caption buttons on the screen: the first screen\'s dark bar through th
   const r = await launch();
   const { page } = r;
   try {
+    // The caption buttons at the window's right edge on the screen: a window as wide as the
+    // screen (1920) is placed at its left, or that edge is past the screen's.
+    await r.app.evaluate(({ BrowserWindow, screen }) => {
+      const w = BrowserWindow.getAllWindows()[0];
+      const a = screen.getDisplayMatching(w.getBounds()).workArea, b = w.getBounds();
+      w.setBounds({ x: a.x + Math.max(0, Math.floor((a.width - b.width) / 2)), y: a.y, width: b.width, height: b.height });
+    });
     await page.waitForSelector('.wback.playing');
     await page.mouse.move(-10, -10);
     await at(page, 3.0);

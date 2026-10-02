@@ -57,11 +57,34 @@ Measured on the Windows runner, each with a negative control that fails:
      management agent on a lab PC can do that), `AssignProcessToJobObject` fails and libuv carries on without
      it, saying nothing.
 
-  The e2e test kills the process `main.ts` runs in, the engines' parent. The run of 651cf16 killed the one
-  Playwright started instead -- its parent, which left the whole app running, engines included, as it should:
-  that was a test that killed the wrong process, not an orphan. Control: all three ways off, both engines stay.
-  The app as a student starts it (the installer's 지금 실행하기) is killed the same way in
-  `tools/windows/check-installer-ui.ps1`, with its process tree.
+  **An orphan was never observed: the problem did not exist.** 651cf16's "orphans" were a test killing the
+  wrong process: Playwright starts the installed app through `cmd.exe /d /s /c "...HallymRISCV.exe" ...`, and the
+  test killed that `cmd.exe` (651cf16's 5692; 5a90f3c printed the same tree: `cmd.exe` 8652, `main.ts` in its child 7032),
+  the parent of the process `main.ts` runs in (651cf16's 1188); the app went on running,
+  engines included, as it should. Killing the right process on the same runner with the engine as it was before
+  the parent watch (the end of stdin and the job object only): both engines gone, 0 `java.exe` left, in 250 ms
+  (CI, 5a90f3c, the installed app). The parent watch is kept as the one way that does not depend on the job
+  object's conditions above. Measured on Windows with the installed app (CI, 5a90f3c), `java.exe` left 5 s after
+  `taskkill /F` on the main process, and which way the engines left by (their trace):
+
+  | the engine as | left | gone after | left by |
+  |---|---|---|---|
+  | shipped (all three ways) | 0 | 250 ms | the job object, before either engine wrote a word |
+  | the parent watch alone | 0 | 250 ms | the parent watch (both) |
+  | the parent watch alone, a shutdown hook that never ends | 0 | 262 ms | the parent watch (both): `halt` |
+  | the end of stdin alone | 0 | 251 ms | the end of stdin (both): it does come on Windows |
+  | the job object alone | 0 | 253 ms | killed from outside |
+  | before the parent watch (651cf16's engine) | 0 | 250 ms | killed from outside |
+  | **control: none of the three** | **2** | -- | -- |
+
+  (250 ms is the check's polling step.) The app as a student starts it -- from the installer's 지금 실행하기:
+  `HallymRISCV.exe` (5536) the parent of both `java.exe`, no `cmd.exe` above it -- killed the same way
+  (`tools/windows/check-installer-ui.ps1`): 0 left, 272 ms.
+
+  RARS's own settings: on Windows `java.util.prefs` keeps them in the registry
+  (`HKCU\Software\JavaSoft\Prefs`), not in the folder the app names (`-Djava.util.prefs.userRoot`, which only
+  Linux and macOS read).
+
 - **Korean through stdio.** Every stream is UTF-8 whatever the code page (`-Dfile.encoding=UTF-8` and the
   stdout/stderr encodings). Control: `-Dfile.encoding=COMPAT` (the code page) garbles a Korean round trip.
 - **Cold start**: a fresh engine ready in about 0.22–0.24 s (median of ten), the first assemble answered in

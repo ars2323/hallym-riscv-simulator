@@ -35,8 +35,15 @@ export async function screenPixels(r: Running, rect: Rect): Promise<Pixels> {
   const at = await r.app.evaluate(({ BrowserWindow, screen }) => {
     const w = BrowserWindow.getAllWindows()[0];
     w.moveTop();
-    return { content: w.getContentBounds(), scale: screen.getPrimaryDisplay().scaleFactor };
+    const d = screen.getDisplayMatching(w.getBounds());
+    return { content: w.getContentBounds(), scale: screen.getPrimaryDisplay().scaleFactor, display: d.bounds };
   });
+  // Off the screen a capture reads black, not an error (a 1920-wide window
+  // with its right edge past a 1920 screen did): say so instead.
+  const sx = at.content.x + rect.x, sy = at.content.y + rect.y;
+  if (sx < at.display.x || sy < at.display.y || sx + rect.width > at.display.x + at.display.width || sy + rect.height > at.display.y + at.display.height) {
+    throw new Error(`the region ${JSON.stringify({ x: sx, y: sy, width: rect.width, height: rect.height })} is not on the screen ${JSON.stringify(at.display)}: a capture there reads black`);
+  }
   const x = Math.round((at.content.x + rect.x) * at.scale), y = Math.round((at.content.y + rect.y) * at.scale);
   const width = Math.round(rect.width * at.scale), height = Math.round(rect.height * at.scale);
   const dir = mkdtempSync(path.join(tmpdir(), 'screen-'));

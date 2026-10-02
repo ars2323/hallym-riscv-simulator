@@ -151,7 +151,11 @@ async function windowsSeen(env: Record<string, string>, out: string): Promise<{ 
     if (Date.now() - t0 > 30_000) throw new Error('the window watcher did not start within 30 s');
     await new Promise((r) => setTimeout(r, 250));
   }
-  const r = await launch(undefined, { env });
+  // Without a console of its own, as a student starts it (Start menu, the installer): Electron
+  // attaches to its parent's console unless told not to, and Playwright starts it under cmd.exe
+  // (CI, 5a90f3c: cmd.exe /d /s /c "...HallymRISCV.exe" ...).  With that console java.exe has one to
+  // share and no window appears, hidden or not: the control could not fail (it did not, 5a90f3c).
+  const r = await launch(undefined, { env: { ...env, ELECTRON_NO_ATTACH_CONSOLE: '1' } });
   const pids = await bothEngines(r);
   await openAndAssemble(r, program(r.dir, 'p.s', 'main:\n  li a0, 7\n  li a7, 10\n  ecall\n'));
   killHard(javaPids('-Dhallym.engine=main', r.dir)[0]);              // a restart: a third java.exe
