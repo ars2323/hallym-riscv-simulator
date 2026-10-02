@@ -243,6 +243,14 @@ jobs:
           $env:SPIM_E2E_SIZE = '1920x1040'
           npx playwright test --output test-results-1920
 
+      # Under Playwright no console window can show, windowsHide or not (CI, 87a9531):
+      # the check and its control as a student starts the app.
+      - name: No console window when the app starts java.exe, started as a student starts it (tools/windows/console-flash.ps1)
+        if: ${{ !cancelled() && hashFiles('electron/report/installed.txt') != '' }}
+        timeout-minutes: 10
+        shell: pwsh
+        run: tools/windows/console-flash.ps1 -Exe (Get-Content report/installed.txt).Trim() -Report report/console-flash
+
       # An attempt, reported either way: the real Microsoft Korean IME
       # (tests/e2e/ime.e2e.ts, in the steps above, is the check that counts:
       # the IME's events through CDP).

@@ -126,6 +126,8 @@ const MUTANTS: Mutant[] = [
     find: "windowsHide: cmd.windowsHide ?? true", replace: "windowsHide: cmd.windowsHide ?? false", tests: ["tests/sim/process.test.ts"] },
   { module: "engine", file: "src/sim/transport.ts", what: "the engine not told its parent",
     find: "    `-Dparent.pid=${process.pid}`,\n", replace: "", tests: ["tests/sim/process.test.ts", "tests/e2e/engine-process.e2e.ts"] },
+  { module: "window", file: "src/renderer/app/index.html", what: "the window titled Hallym MIPS (the MIPS page's <title>)",
+    find: "<title>Hallym RISC-V</title>", replace: "<title>Hallym MIPS</title>", tests: ["tests/renderer/title.test.ts"] },
   { module: "window", file: "src/renderer/app/panels/data.ts", what: "Data addresses without 0x",
     find: "code(hex32(base16), 'daddr')", replace: "code(hex32(base16).slice(2), 'daddr')", tests: ["tests/e2e/panels.e2e.ts"] },
   { module: "window", file: "src/renderer/app/panels/console.ts", what: "Console folded at the start",

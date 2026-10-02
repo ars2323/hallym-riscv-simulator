@@ -13,8 +13,9 @@
       shutdown hook that never ends (it halts).  Control: all three off, the
       engines stay (orphans; killed here).
    3. Windows: no console window appears when the window starts its engines
-      or restarts one (java.exe is a console program).  Control: started
-      without windowsHide (ENGINE_WINDOWS_HIDE=0), one does.
+      or restarts one (java.exe is a console program); the watcher's own
+      control: a console program's window is seen.  The control without
+      windowsHide cannot fail under Playwright: tools/windows/console-flash.ps1.
       (tools/windows/console-windows.ps1 watches the desktop every 20 ms.)
 
    The tests are independent: one failing does not skip the others.
@@ -204,8 +205,9 @@ test('3 (Windows): no console window flashes up when engines start or restart', 
   expect(seen.filter(consoleLike)).toEqual([]);
 });
 
-test('3 (Windows), negative control: without windowsHide a console window appears', async ({}, info) => {
-  test.skip(process.platform !== 'win32', 'Windows only');
-  const seen = await windowsSeen(info.outputPath('windows.json'), () => appRun({ ENGINE_WINDOWS_HIDE: '0' }));
-  expect(seen.filter(consoleLike).length).toBeGreaterThan(0);
-});
+// Its negative control (ENGINE_WINDOWS_HIDE=0: a window must show) cannot fail
+// here: under Playwright every java.exe has a console of its own and none shows
+// a window, windowsHide or not (CI, 87a9531: a conhost.exe child of each
+// engine, no window in either run, the watcher's own control seen).  The check
+// and its control as a student starts the app: tools/windows/console-flash.ps1
+// (the Windows CI job).

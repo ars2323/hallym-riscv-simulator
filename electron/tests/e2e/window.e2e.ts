@@ -16,6 +16,21 @@ const symbols = (r: Running) => r.app.evaluate(({ BrowserWindow }) => (BrowserWi
 const visibleHarams = (r: Running) => r.page.evaluate(() => [...document.querySelectorAll('img.char')]
   .filter((e) => e.checkVisibility({ visibilityProperty: true })).map((e) => (e.closest('dialog') ? 'dialog' : e.closest('.tut-card') ? 'card' : 'panel')));
 
+// The window's title is what Windows shows in the taskbar and Alt+Tab: the
+// page's <title> becomes it once the page loads (index.html said "Hallym
+// MIPS" until 87a9531: the Windows CI saw that title on the first screen).
+test('the window\'s title: Hallym RISC-V on the first screen, the file and Hallym RISC-V in the Editor', async () => {
+  const r = await launch();
+  try {
+    const title = () => r.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getTitle());
+    expect(await title()).toBe('Hallym RISC-V');
+    await openAndAssemble(r, program(r.dir, 'title.s', 'main:\n  li a7, 10\n  ecall\n'));
+    expect(await title()).toBe('title.s — Hallym RISC-V');
+  } finally {
+    await r.close();
+  }
+});
+
 test('opens maximised (Windows), at its own 1280x800 where nothing maximises it', async () => {
   const r = await launch({ width: 1280, height: 800 }, { keepSize: true });
   try {
