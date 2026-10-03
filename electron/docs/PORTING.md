@@ -1810,16 +1810,30 @@ the board needs nothing from the app but a seed. The card's own lights (`panels/
 `.wtitle` and `.action` in `app.css`) are the app's, not the board's; a RISC-V edition can take them
 or leave them, and they need only `onFrame`.
 
+### The top bar, empty on the first screen (2.8.1)
 
-## 33. Hallym RISC-V 1.0.0: section 32 taken as it is; the card centred by its ink; RARS's settings off the registry
+The bar carried the mark and "Hallym MIPS" at its left and four buttons at its right -- tutorial,
+new file, open, settings -- over the board.  The card below it carries the same mark at 60 px, the
+whole product name, and the two ways in; the buttons were a second offer of what the card already
+offers, and the mark a small second copy of it.  Both are hidden on `body.first-screen` now, and the
+bar itself stays: it is what a frameless window is dragged by, and the system's caption buttons sit
+in it.  Everything is back the moment a file is open.
+
+What it costs: **settings and About are reached from that bar, so they cannot be reached from the
+first screen at all.**  A student who wants a larger font before opening anything has to open
+something first.  Four e2e tests reached settings that way and now go through the Editor; the
+caption patch's "with a dialog over the first screen" leg went, because nothing can raise a dialog
+there any more -- the patch under a backdrop is still checked in the Editor and over the tutorial.
+
+## 33. Hallym RISC-V 1.0.0: section 32 taken as it is (MIPS 2.8.1); the card centred by its ink; RARS's settings off the registry
 
 *This section is the RISC-V edition's (`ars2323/hallym-riscv-simulator`); sections 1 to 32 are the MIPS
-edition's, as they are at its v2.8.0.*
+edition's, as they are at its v2.8.1 (section 32 with 2.8.1's "The top bar, empty on the first screen").*
 
 **What was taken, and what was changed.** The five files of `src/renderer/startfield/`, and
 `tests/renderer/spark.test.ts`, `tests/e2e/board-measure.ts`, `tests/e2e/png.ts`, `tools/start-cost.ts`,
-`tools/start-film.ts` and `tools/start-measure.ts`, are MIPS 2.8.0's byte for byte (SHA-256 compared,
-`docs/FROM-MIPS.md`). The three changes the table in section 32 allows, and no others:
+`tools/start-film.ts` and `tools/start-measure.ts`, are MIPS 2.8.0's byte for byte, unchanged in 2.8.1
+(SHA-256 compared, `docs/FROM-MIPS.md`). The three changes the table in section 32 allows, and no others:
 
 | What | Where | MIPS 2.8.0 | here |
 |---|---|---|---|
@@ -1884,6 +1898,11 @@ settings back in the JDK's backend"; killed.
 glass card's `--text-2-glass`; Haram, the description and the buttons' second lines on the first screen.
 NOTICE names no video; it carries the RISC-V trademark notice.
 
+**The top bar is empty on the first screen**, as in MIPS 2.8.1 (section 32, its last part): the mark and
+the four buttons hidden on `body.first-screen`, the bar kept for dragging and the caption buttons. Settings
+and About are reached once a file is open. Its test and mutant ("the top bar's mark and buttons back over
+the board") are 2.8.1's; killed here.
+
 **New checks, each with a mutant that is killed:**
 
 - the window's title is "Hallym RISC-V" at every moment from the first frame (`tests/e2e/window.e2e.ts`:
@@ -1902,19 +1921,22 @@ The card's hierarchy floors are half of what was measured here (lift at rest →
 quality 1 is lossless, the PNG's pixels to the byte). The window's screens lossless, the first screen's at 0.85.
 The CI job that commits the Windows pictures makes WebP with `cwebp`.
 
-### MIPS 2.8.1 로 역이식할 것 (to carry back to the MIPS edition)
+### MIPS 2.8.2 로 역이식할 것 (to carry back to the MIPS edition)
 
-1. **The card centred by its ink** (above). MIPS 2.8.0 has the same hidden way back and measured 1.42. Take
+MIPS 2.8.1 (the top bar) was published while this round ran, and is taken here; none of the five below
+is in it.
+
+1. **The card centred by its ink** (above). MIPS 2.8.0 and 2.8.1 have the same hidden way back; 2.8.0 measured 1.42. Take
    `centre()` and its calls from `panels/welcome.ts`, the `transform` line of `.wstack` in `app.css`, the test
    and its mutant.
 2. **`set -o pipefail` in every workflow step that pipes.** GitHub's default `bash` has no pipefail, so
    `node tools/mutants.ts … | tee baseline.json` in `mutants.yml` passes when the tool fails. Here every step
    that pipes (that one, the pictures commit, finding the tested run, both publishing steps) sets it.
 3. **WebP for the documents' pictures, with the cap checked** (`tools/webp.ts`, `tools/pictures.ts`,
-   `tests/docs/pictures.test.ts`, the `pictures` job's conversion). MIPS 2.8.0 has two pictures over 400 KB
+   `tests/docs/pictures.test.ts`, the `pictures` job's conversion). MIPS 2.8.1 has two pictures over 400 KB
    (`start-clip-contact.jpg` 1.33 MB, `start-clip-2.4.0-contact.jpg` 1.42 MB) and nothing that says so.
-4. **The minimised-and-restored test, and the ResizeObserver teardown check** (`start.e2e.ts`): MIPS 2.8.0 has
+4. **The minimised-and-restored test, and the ResizeObserver teardown check** (`start.e2e.ts`): MIPS 2.8.1 has
    neither.
-5. **Stale lines about the video in MIPS 2.8.0's documents**: `docs/ARCHITECTURE.md` (the test table's "first
+5. **Stale lines about the video in MIPS 2.8.1's documents**: `docs/ARCHITECTURE.md` (the test table's "first
    screen's video" row and `backdrop` in the panels list) and `src/renderer/assets/hallym/README.md` (characters
    "on the first screen", the video behind the card). Fixed here.
