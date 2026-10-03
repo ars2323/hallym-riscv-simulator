@@ -1809,3 +1809,112 @@ What to change there, and nothing else:
 the board needs nothing from the app but a seed. The card's own lights (`panels/spark.ts`,
 `.wtitle` and `.action` in `app.css`) are the app's, not the board's; a RISC-V edition can take them
 or leave them, and they need only `onFrame`.
+
+
+## 33. Hallym RISC-V 1.0.0: section 32 taken as it is; the card centred by its ink; RARS's settings off the registry
+
+*This section is the RISC-V edition's (`ars2323/hallym-riscv-simulator`); sections 1 to 32 are the MIPS
+edition's, as they are at its v2.8.0.*
+
+**What was taken, and what was changed.** The five files of `src/renderer/startfield/`, and
+`tests/renderer/spark.test.ts`, `tests/e2e/board-measure.ts`, `tests/e2e/png.ts`, `tools/start-cost.ts`,
+`tools/start-film.ts` and `tools/start-measure.ts`, are MIPS 2.8.0's byte for byte (SHA-256 compared,
+`docs/FROM-MIPS.md`). The three changes the table in section 32 allows, and no others:
+
+| What | Where | MIPS 2.8.0 | here |
+|---|---|---|---|
+| The seed | `panels/spark.ts`, `SEED` | 20261002 | 20261003 |
+| The product's name | `panels/welcome.ts`, `WORDMARK` | `'Hallym MIPS Simulator'` | `'Hallym RISC-V Simulator'` |
+| The symbol | `panels/welcome.ts`, `app.ts` | `hallym/marks/symbol-basic.svg` | the same file (this repository's copy) |
+
+`tests/renderer/startfield.test.ts` reads the seed from `spark.ts`, and its counts and golden are this seed's:
+227 traces, 27,485 px of line, 474 pads, 228 of them floating, at 1280×800 (MIPS: 217, 25,539, 457, 228);
+golden `aae3aa7e51501277`. At 1920×1080 there are 399 traces: 1.76 times as many for 2.03 times the area
+(0.87; the test allows 0.75 to 1.25).
+
+**Measured** at 1920×1080 (`tools/start-measure.ts`, Linux, xvfb; the same targets as MIPS):
+
+| | target | MIPS 2.8.0 | here |
+|---|---|---|---|
+| mean brightness | 38–56 | 51.5 | 51.2 |
+| at 20 or below | ≤ 30 % | 0.00 % | 0.00 % |
+| 45 and up | 22–34 % | 26.67 % | 27.41 % |
+| 160 and up | 4–9 % | 4.85 % | 4.76 % |
+| 220 and up | 1.5–4.5 % | 1.61 % | 1.61 % |
+| first lit p10 / p50 / p90 / p99 | 0.6–1.0 / 2.2–3.0 / 5.0–6.5 / 7.5–9.0 s | 1.97 / 3.77 / 6.55 / 8.32 s | 0.90 / 2.85 / 5.85 / 7.50 s |
+| p90 − p10 | ≥ 4.0 s | | 4.95 s |
+| 90 % of each ring lit, farthest − nearest | ≥ 2.0 s | about 5.1 s | 5.70 s |
+| grown at | | | 8.32 s |
+
+The rings' 90 % moments, nearest to farthest: 1.80 / 3.00 / 4.65 / 6.30 / 7.50 s.
+
+**The card was 1.43 times as far from the frame's top as from its bottom.** The column (`.wstack`) is centred
+by its boxes, and one box is not seen: the way back (`.back`, "← 처음으로") keeps its 14 px of height and 18 px of
+margin while it is hidden on the first step, so the ink sat 16 px high. Measured off the die frame's pixels at
+1920×1080: 72.25 px above the ink, 103.5 px below (MIPS 2.8.0, the same markup: 1.42). The symbol's own
+transparent margins are 0.75 and 0.5 px of 60, which is not it.
+
+Now (`panels/welcome.ts`, `centre()`): the column's visible ink is measured -- the symbol by its pixels'
+alpha (once, when it loads), the name, the buttons, the way back when it shows -- and the column is moved by
+the difference as `--ink-shift` (`.wstack { transform: translateY(var(--ink-shift, 0px)); }`), again on every
+resize, when the fonts are ready, and at each step. Checked (`tests/e2e/start.e2e.ts`, "the column is centred
+in the die frame by its ink, at four window sizes"): above / below within 1.00 ± 0.08. Measured:
+
+| window | above / below | ratio |
+|---|---|---|
+| 1280×800 | 61 / 62 px | 0.984 |
+| 1920×1080 | 84 / 83 px | 1.012 |
+| 1920×540 | 34 / 33 px | 1.030 |
+| 1024×768 | 52 / 54 px | 0.963 |
+
+Its mutant takes the transform out ("the column centred by its boxes, not its ink"); killed.
+
+**RARS's settings are not in the registry** (`probe/src/HallymPrefs.java`, `docs/WINDOWS.md`). RARS writes
+`HKCU\Software\JavaSoft\Prefs\rars` through `java.util.prefs` at every start. The engine is given a
+`PreferencesFactory` of its own (`-Djava.util.prefs.PreferencesFactory=HallymPrefs`), which keeps the settings
+in the engine's own folder in the run's folder: one for each engine, removed with the run. RARS is not
+changed. The jdeps check still passes (`java.prefs` was in the runtime already). Checked on Linux by
+`tests/sim/process.test.ts` (item 8; control: the JDK's file backend leaves its folder) and on Windows by
+`tests/e2e/registry.e2e.ts` (control: the JDK's own factory writes RARS's key again). Mutant: "RARS's
+settings back in the JDK's backend"; killed.
+
+**What went** with the campus video, as in MIPS 2.8.0: `panels/backdrop.ts`, `assets/hallym/start/`,
+`tools/start-video.ts`, `tools/start-variants.ts`, `tools/start-variants-list.ts`,
+`tests/e2e/backdrop-measure.ts`, `tests/helpers/clip-motion.ts`, `tests/renderer/start-clip.test.ts`; the
+glass card's `--text-2-glass`; Haram, the description and the buttons' second lines on the first screen.
+NOTICE names no video; it carries the RISC-V trademark notice.
+
+**New checks, each with a mutant that is killed:**
+
+- the window's title is "Hallym RISC-V" at every moment from the first frame (`tests/e2e/window.e2e.ts`:
+  every title the page and the window report, through a reload);
+- the documents' pictures are WebP and 400 KB or less (`tools/pictures.ts`, `tests/docs/pictures.test.ts`):
+  `installer-started.png` had gone in at 1.8 MB while the screens' README said 400 KB;
+- minimised and restored, the board runs one loop, not two (`start.e2e.ts`). A count of frames does not show
+  two loops under xvfb: the mutant's two chains ran at about 30 frames a second each, 64 in all against 61. What
+  shows them is every moment painted twice, once by each chain in the same vsync;
+- leaving the first screen leaves no ResizeObserver on the board.
+
+The card's hierarchy floors are half of what was measured here (lift at rest → peak: name 7.17, first way in
+2.50, second 0.82 grey levels; floors 3.6 / 1.25 / 0.41).
+
+**The documents' pictures are WebP** (`tools/webp.ts`: encoded by the app's own Chromium, `canvas.toBlob`;
+quality 1 is lossless, the PNG's pixels to the byte). The window's screens lossless, the first screen's at 0.85.
+The CI job that commits the Windows pictures makes WebP with `cwebp`.
+
+### MIPS 2.8.1 로 역이식할 것 (to carry back to the MIPS edition)
+
+1. **The card centred by its ink** (above). MIPS 2.8.0 has the same hidden way back and measured 1.42. Take
+   `centre()` and its calls from `panels/welcome.ts`, the `transform` line of `.wstack` in `app.css`, the test
+   and its mutant.
+2. **`set -o pipefail` in every workflow step that pipes.** GitHub's default `bash` has no pipefail, so
+   `node tools/mutants.ts … | tee baseline.json` in `mutants.yml` passes when the tool fails. Here every step
+   that pipes (that one, the pictures commit, finding the tested run, both publishing steps) sets it.
+3. **WebP for the documents' pictures, with the cap checked** (`tools/webp.ts`, `tools/pictures.ts`,
+   `tests/docs/pictures.test.ts`, the `pictures` job's conversion). MIPS 2.8.0 has two pictures over 400 KB
+   (`start-clip-contact.jpg` 1.33 MB, `start-clip-2.4.0-contact.jpg` 1.42 MB) and nothing that says so.
+4. **The minimised-and-restored test, and the ResizeObserver teardown check** (`start.e2e.ts`): MIPS 2.8.0 has
+   neither.
+5. **Stale lines about the video in MIPS 2.8.0's documents**: `docs/ARCHITECTURE.md` (the test table's "first
+   screen's video" row and `backdrop` in the panels list) and `src/renderer/assets/hallym/README.md` (characters
+   "on the first screen", the video behind the card). Fixed here.
