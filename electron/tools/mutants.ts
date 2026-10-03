@@ -528,6 +528,9 @@ const MUTANTS: Mutant[] = [
 
 function copyTree(dir: string, linkProbe: boolean): void {
   for (const d of ['src', 'tests', 'tools']) cpSync(path.join(root, d), path.join(dir, d), { recursive: true });
+  // The documents' pictures, which tests/docs/pictures.test.ts reads (electron/docs, and docs/ beside electron/).
+  cpSync(path.join(root, 'docs'), path.join(dir, 'docs'), { recursive: true });
+  cpSync(path.join(root, '..', 'docs'), path.join(dir, '..', 'docs'), { recursive: true });
   for (const f of ['package.json', 'tsconfig.json', 'playwright.config.ts']) cpSync(path.join(root, f), path.join(dir, f));
   cpSync(path.join(root, '..', 'NOTICE'), path.join(dir, '..', 'NOTICE')); // the repository's (About lists it)
   symlinkSync(path.join(root, 'node_modules'), path.join(dir, 'node_modules'));

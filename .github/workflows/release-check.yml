@@ -60,7 +60,7 @@ jobs:
         shell: powershell
         run: tools/windows/screen-1920.ps1 -Report report
 
-      - name: Latest, one asset, and the earlier releases still there
+      - name: Latest, its three assets, and the earlier releases still there
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -72,9 +72,11 @@ jobs:
           $v = $env:TAG.TrimStart('v')
           $release = gh release view $env:TAG --repo $repo --json isDraft,isPrerelease,assets | ConvertFrom-Json
           if ($release.isDraft -or $release.isPrerelease) { throw "$env:TAG is a draft or a pre-release" }
-          $assets = @($release.assets | ForEach-Object { $_.name })
-          if ($assets.Count -ne 1 -or $assets[0] -ne "HallymRISCV-$v-win-x64-setup.exe") { throw "the release's assets should be the installer alone; they are: $($assets -join ', ')" }
-          Write-Host "PASS  one asset: $($assets[0])"
+          # The installer, and the first screen's film and contact sheet (electron.yml, job film).
+          $assets = @($release.assets | ForEach-Object { $_.name } | Sort-Object)
+          $want = @("HallymRISCV-$v-start-screen-1920x1080.mp4", "HallymRISCV-$v-start-screen-sheet.png", "HallymRISCV-$v-win-x64-setup.exe") | Sort-Object
+          if (($assets -join '|') -ne ($want -join '|')) { throw "the release's assets should be $($want -join ', '); they are: $($assets -join ', ')" }
+          Write-Host "PASS  assets: $($assets -join ', ')"
           # Every release: never deleted.
           $published = @(gh release list --repo $repo --exclude-drafts --limit 200 --json tagName | ConvertFrom-Json | ForEach-Object { $_.tagName })
           $must = @(git tag -l 'v*')

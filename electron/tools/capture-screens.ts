@@ -32,7 +32,7 @@
    start-frame-3 are three moments of it; start-<width> and start-2-<width>
    the two steps at the other widths.
 
-   The user guide's three pictures (docs/usage/usage.ko.md, usage.en.md)
+   The user guide's three pictures (docs/usage/usage.ko.md)
    are taken with the set and written to docs/usage/images/: the start
    screen, tutorial step 4, and the running window with each part named
    (the names drawn over the page for the picture only).

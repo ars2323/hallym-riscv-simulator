@@ -26,13 +26,13 @@ product of Hallym University.
   (`#00ADA9`), so **no character is placed on a teal surface**; characters
   stand only on white or light grey.
 - Characters appear only where there is nothing else (an empty panel, the
-  first screen, the tutorial's card, the first successful run). Not on the
+  tutorial's card, the first successful run). Not on the
   toolbar, panel heads, status bar or menus, not next to errors, not where
   colour carries meaning.
 - Nothing is written on the board held in `sign.png`; the message goes beside
   the character.
-- The first screen's video runs behind the card, blurred and under navy; the
-  character stands on the card's opaque white, never on the video.
+- The first screen has no character: its card is the chip of the board the
+  program draws, and carries the symbol, the name and the two ways in.
 
 ## Files
 
@@ -75,11 +75,12 @@ product of Hallym University.
 
 ### The first screen's background
 
-There is no asset for it any more. The first screen's background was a clip
-of the university's promotional video until 2.7.1; from 2.8.0 the program
-draws it (`electron/src/renderer/startfield/`), so there is no video, no
-still and nothing of the campus in the installer. What the clip was, and
-what replaced it, is in `electron/docs/PORTING.md`.
+There is no asset for it. The first screen's background was a clip of the
+university's promotional video before 1.0.0 (in the MIPS edition until
+2.7.1); from 1.0.0 (MIPS 2.8.0) the program draws it
+(`electron/src/renderer/startfield/`), so there is no video, no still and
+nothing of the campus in the installer. What the clip was, and what
+replaced it, is in `electron/docs/PORTING.md` (sections 32 and 33).
 
 ## Where they come from
 

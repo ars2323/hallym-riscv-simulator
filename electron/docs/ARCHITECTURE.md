@@ -169,7 +169,7 @@ carries on assembling and running with a new process (`tests/e2e/flows.e2e.ts`, 
 | The machine options in settings (pseudo-instructions, delayed branches and loads, mapped I/O, quiet) and the exception handler (default, none, file) reach the core | `tests/node/machine-options.test.ts`, `tests/sim/process.test.ts` (mapped I/O input) |
 | Window: only font size and number base are saved, Ctrl +/− and advanced settings last only for this run, the notices in About | `tests/e2e/settings.e2e.ts` |
 | The executable image (`.hmx`): the goldens `tests/hmx/*.hmx` made again from their `.s`, read back against the core, the same every time; the file the window writes, against the Text panel | `tests/sim/hmx.test.ts`, `tests/e2e/export.e2e.ts`; the format: `docs/hmx-format.md` at the repository root |
-| The first screen's video: silent, from the app's own file, one for both steps, the card readable, none under reduced motion or in the Editor, navy when it cannot play | `tests/e2e/start.e2e.ts`, `tests/renderer/start-clip.test.ts` |
+| The first screen's board: the generator's geometry and its golden; brightness, timing and the rings off the window's pixels; the card's hierarchy and contrast; settled under reduced motion; nothing of it left in the Editor | `tests/renderer/startfield.test.ts`, `tests/renderer/spark.test.ts`, `tests/e2e/start.e2e.ts` |
 | The same e2e against the packaged app (Linux `--dir`, Windows installed build) | `SPIM_E2E_EXE`, `.github/workflows/electron.yml` (repository root) |
 | The tests above actually catch wrong implementations | `tools/mutants.ts`: 171 mutants, 9 of which rebuild the addon. All of them weekly in CI (`.github/workflows/mutants.yml`, results as an artifact); a round runs those its changes could touch (`--changed`, against `tools/mutants-baseline.json`) |
 
@@ -183,7 +183,7 @@ src/renderer/app/
   ui.ts                 One panel head (panelHead) and one tab head (tabsHead): every head comes from here
   editor.ts             CodeMirror 6: colors, error line and `!`, breakpoint gutter, running line, Tab = 4 spaces, Ctrl+S during composition
   panels/               registers · text (virtual list) · data (Data table) · inspector · console · welcome ·
-                        backdrop (the first screen's video) · ask (in-app dialog) · settings · about
+                        spark (the first screen's card lights) · ask (in-app dialog) · settings · about
   logic/                Pure: register rows and what changed, Text rows, stop → state, visible row range, columns by width (columns.ts)
   perf.ts               Records panel update costs (window.__perf, read by tools/measure-ui.ts)
 ```
@@ -194,7 +194,7 @@ src/renderer/app/
 - **State is not restored.** Window size, panels, recent files, open files and breakpoints all start from fixed defaults
   every time (lab PCs are shared by many people). The settings file (`userData/settings.json`) holds only the font size and the Data number base.
   Ctrl + / Ctrl − apply only to the current run.
-- **The first screen's video** is one file: to use another (say, the university's own master), run `node tools/start-video.ts <file>`, which rewrites `src/renderer/assets/hallym/start/start.webm` and its still `start.jpg`; nothing else changes.
+- **The first screen is drawn, not played** (2.8.0): `src/renderer/startfield/` grows a circuit board from one seed, on two canvases -- the board below, drawn while it grows and once more when it has, and the layer above it, which carries what is still moving. There is no video and no still. The folder imports nothing outside itself, so another simulator can copy it whole (`docs/PORTING.md`, "What a RISC-V edition changes").
 - The register panel creates one DOM row per register once, and on every stop updates only the cells whose text changed and the rows whose highlight changed.
   Text keeps only the visible rows plus 10 rows before and after in the DOM. Measurements for both are in `docs/UI-ROUND1.md`.
 

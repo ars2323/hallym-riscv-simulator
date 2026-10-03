@@ -21,7 +21,7 @@ its artifact `windows-report`, `sizes.json`). Measured on the CI run of 2026-10-
 | Java runtime | 46.2 MB | `resources\engine\runtime`: Eclipse Temurin 21.0.12+1 by jlink — java.base, java.prefs, java.desktop (and java.datatransfer, java.xml, which java.desktop needs), zip-9, no debug data |
 | RARS | 1.8 MB | `resources\engine\rars.jar`, built from RARS's tag v1.6 (`probe/setup.sh`) |
 | the engine | < 0.1 MB | `resources\engine\classes`: `RarsProbe` (`probe/src`) |
-| the app | 7.4 MB | `resources\app.asar`: the window, fonts, characters, the first screen's video |
+| the app | 7.4 MB | `resources\app.asar`: the window, fonts, characters (the first screen is drawn by the program: no video, no still) |
 | **installer** | **134.0 MB** (140,534,430 bytes) | NSIS, LZMA |
 
 The installer is not byte-reproducible (NSIS writes the build time into it): only the published file's size and
@@ -42,7 +42,19 @@ Measured on the Windows runner, each with a negative control that fails:
   runtime's `java.exe` started on its own (a Windows Terminal window, 5b5726c): it shows none for a console child
   of the app whose stdio is pipes, so it cannot show the flash `windowsHide` prevents, and the check proves
   nothing there.
-  `console-flash.ps1` says so in every run (BLOCKED) instead of passing.
+  `console-flash.ps1` says so in every run (BLOCKED) instead of passing. So `windowsHide` is held only by the
+  unit test and its mutant (`tests/sim/process.test.ts`; the mutant "java started without windowsHide (a console window)"), not by
+  anything seen on a screen.
+- **Nothing in the registry.** RARS keeps its settings through `java.util.prefs`, whose Windows backend writes
+  `HKCU\Software\JavaSoft\Prefs\rars` at every start: on a lab PC with one account for everyone, one student's
+  RARS settings were the next one's. The engine is given its own factory
+  (`-Djava.util.prefs.PreferencesFactory=HallymPrefs`, `probe/src/HallymPrefs.java`), which keeps them in the
+  engine's own folder in the run's folder, a different one for each engine, removed when the app ends; RARS
+  itself is not changed. `tests/e2e/registry.e2e.ts` lists every key and value under
+  `HKCU\Software\JavaSoft\Prefs` before and after a run: nothing new. Its control puts the JDK's own factory
+  back (`ENGINE_JAVA_ARGS`) with RARS's key removed first, and the key is there again afterwards.
+  Linux and macOS: the same factory (`tests/sim/process.test.ts`, item 8, with the JDK's file backend as its
+  control).
 - **Killing.** Windows has no signals: `kill('SIGKILL')` is `TerminateProcess`; the exit is reported in about
   10 ms and the process is gone. Control: a polite end (closing stdin) against an engine that ignores it leaves
   it running.
@@ -102,7 +114,7 @@ Measured on the Windows runner, each with a negative control that fails:
 ## What CI checks on Windows (.github/workflows/electron.yml, job `windows`)
 
 The screen set to 1920×1080 and Windows' animation effects on (with them off, Chromium reports
-prefers-reduced-motion and the first screen shows its still), then: type check, unit tests, the documents'
+prefers-reduced-motion and the first screen shows its board settled, nothing moving), then: type check, unit tests, the documents'
 links, the engine measured with the JDK; the installer built; `/S`; the engine measured again with the installed
 runtime; every e2e test against the **installed** program, at its own size and with 1920×1040 as every test's
 window; the real Microsoft Korean IME (an attempt, reported either way: the CDP tests are the ones that count);

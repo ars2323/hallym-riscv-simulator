@@ -147,6 +147,55 @@ jobs:
         if: ${{ !cancelled() }}
         run: SPIM_E2E_SIZE=1920x1040 xvfb-run -a -s '-screen 0 2400x1400x24' npx playwright test
 
+  # The first screen's opening as a film, 1920x1080, 14 s, 60 fps (840 frames)
+  # and one contact sheet: put at each frame's moment by the board's own clock
+  # (tools/start-film.ts), not recorded off the screen; taken twice and every
+  # frame compared.  The release attaches this run's film and sheet as it
+  # attaches this run's installer: the tag builds nothing.
+  film:
+    name: The first screen's film (Linux)
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ELECTRON_DISABLE_SANDBOX: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21.0.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: ffmpeg (the film and the sheet)
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+      - name: The engine
+        working-directory: .
+        run: |
+          echo "RARS_HOME=$RUNNER_TEMP/rars" >> "$GITHUB_ENV"
+          RARS_HOME="$RUNNER_TEMP/rars" CLAUDE_PROJECT_DIR="$PWD" .claude/hooks/session-start.sh
+      - name: 840 frames, twice; the film and the sheet
+        shell: bash
+        run: |
+          set -o pipefail
+          node tools/build-ui.ts
+          xvfb-run -a -s '-screen 0 2400x1400x24' node tools/start-film.ts --out report/film --sizes 1920x1080 --twice
+          jq -e '."1920x1080-reproducible" == true and ."1920x1080-frames" == 840 and .contactSheet == true' report/film/report.json \
+            || { echo "::error::the film is not 840 frames taken identically twice, with its sheet: $(cat report/film/report.json)"; exit 1; }
+          ffprobe -v error -select_streams v:0 -count_frames \
+            -show_entries stream=codec_name,width,height,r_frame_rate,nb_read_frames -of default=nw=1 report/film/start-1920x1080.mp4
+          ls -l report/film
+          sha256sum report/film/start-1920x1080.mp4 report/film/contact-sheet.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: start-film
+          path: |
+            electron/report/film/start-1920x1080.mp4
+            electron/report/film/contact-sheet.png
+            electron/report/film/report.json
+          if-no-files-found: error
+
   windows:
     name: Windows — build, test, package, install
     if: github.ref_type != 'tag'   # a tag publishes what its commit's run built and checked (job `tested`)
@@ -484,8 +533,8 @@ jobs:
           for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/electron.yml/runs?head_sha=$sha&per_page=50" \
                         --jq '.workflow_runs[] | select((.event == "push" or .event == "workflow_dispatch") and .head_branch == "main") | .id'); do
             passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" \
-              --jq '[.jobs[] | select(.conclusion == "success") | .name] | map(select(startswith("Windows — build") or startswith("Install over the latest") or startswith("Type check, unit tests") or startswith("e2e at the four widths"))) | length')
-            if [ "$passed" = 4 ]; then chosen=$id; break; fi
+              --jq '[.jobs[] | select(.conclusion == "success") | .name] | map(select(startswith("Windows — build") or startswith("Install over the latest") or startswith("Type check, unit tests") or startswith("e2e at the four widths") or startswith("The first screen's film"))) | length')
+            if [ "$passed" = 5 ]; then chosen=$id; break; fi
           done
           [ -n "$chosen" ] || { echo "::error::no run of electron.yml on main for $sha whose build, tests and upgrade passed: push the release commit to main and let its run finish before tagging"; exit 1; }
           run_sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$chosen" --jq .head_sha)
@@ -495,6 +544,8 @@ jobs:
             echo "::error::run $chosen did not install over the latest release: $(head -1 upgrade/release/upgrade.txt)"; exit 1
           fi
           gh run download "$chosen" --repo "$GITHUB_REPOSITORY" -n HallymRISCV-windows -D dist
+          gh run download "$chosen" --repo "$GITHUB_REPOSITORY" -n start-film -D film
+          sha256sum film/*
           echo "TESTED_RUN=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$chosen" >> "$GITHUB_ENV"
           echo "the installer of run $chosen (commit $run_sha): $(ls dist)"
           sha256sum dist/*
@@ -504,6 +555,15 @@ jobs:
         with:
           name: HallymRISCV-windows
           path: dist/*-setup.exe
+          if-no-files-found: error
+
+      - name: Hand on its film and sheet
+        uses: actions/upload-artifact@v4
+        with:
+          name: start-film
+          path: |
+            film/start-1920x1080.mp4
+            film/contact-sheet.png
           if-no-files-found: error
 
       - name: Which run it came from
@@ -538,6 +598,12 @@ jobs:
         with:
           name: tested-run
 
+      - name: The first screen's film and sheet from the same run
+        uses: actions/download-artifact@v4
+        with:
+          name: start-film
+          path: film
+
       - name: The version, the notes, the installer, its SHA-256
         run: |
           set -o pipefail
@@ -563,7 +629,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -o pipefail
-          gh release create "$GITHUB_REF_NAME" "$SETUP" --repo "$GITHUB_REPOSITORY" --verify-tag \
+          version="${GITHUB_REF_NAME#v}"
+          cp film/start-1920x1080.mp4 "HallymRISCV-$version-start-screen-1920x1080.mp4"
+          cp film/contact-sheet.png "HallymRISCV-$version-start-screen-sheet.png"
+          gh release create "$GITHUB_REF_NAME" "$SETUP" "HallymRISCV-$version-start-screen-1920x1080.mp4" "HallymRISCV-$version-start-screen-sheet.png" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "Hallym RISC-V ${GITHUB_REF_NAME#v}" --notes-file release-notes.md --latest
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json url,isDraft,isPrerelease,assets \
             --jq '"\(.url)  draft=\(.isDraft) prerelease=\(.isPrerelease)  " + ([.assets[].name] | join(", "))'

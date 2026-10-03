@@ -11,7 +11,7 @@
 
 **사용법:** [사용 안내](docs/usage/usage.ko.md) — 설치, 첫 프로그램, 화면의 각 패널.
 
-![작업 화면: 편집기, 레지스터, Text, Inspector](electron/docs/screens/max-1920.png)
+![작업 화면: 편집기, 레지스터, Text, Inspector](electron/docs/screens/max-1920.webp)
 
 ## 무엇을 볼 수 있나
 

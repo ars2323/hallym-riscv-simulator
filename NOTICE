@@ -3,12 +3,15 @@ Hallym RISC-V Simulator — notices
 
 What the program (the installer HallymRISCV-<version>-win-x64-setup.exe and
 what it installs) contains, and under which terms.  Each component keeps its
-own license.  The university's marks, characters and video (section 7) are
-under no license from this project at all.
+own license.  The university's marks and characters (section 7) are under
+no license from this project at all.
 
 This is a personal project, made for teaching computer architecture at
 Hallym University (AIAC Lab).  It is not an official product of Hallym
 University.
+
+RISC-V is a registered trademark of RISC-V International.
+This software is not affiliated with, nor endorsed by, RISC-V International.
 
 Contents
   1. RARS and JSoftFloat               the simulator engine (MIT)
@@ -17,7 +20,7 @@ Contents
   4. Pretendard, D2Coding              fonts (SIL Open Font License 1.1)
   5. Lucide                            icons (ISC / MIT)
   6. Other components                  npm packages bundled into the program
-  7. Hallym University marks, the characters Haram and Hari, and the video
+  7. Hallym University marks, and the characters Haram and Hari
 
 
 1. RARS and JSoftFloat
@@ -145,13 +148,12 @@ and shown in About > Licenses.
 7. Hallym University marks, and the characters Haram and Hari
 -------------------------------------------------------------
 
-The Hallym University symbol (the title bar's logo, the application icon, the
-installer's side band), the university's characters Haram (하람) and Hari
-(하리), and the opening aerial shot of its promotional video (0:00.1 to
-0:02.6), slowed down and without sound (the first screen), belong to Hallym
-University.  The video is "[Official Video] 한림대학교 홍보영상｜The New Hallym
-대학의 내일을 열다", from Hallym University's official YouTube channel,
-@HALLYMNEWS.  They are the Hallym MIPS Simulator's (v2.7.1), as they are.
+The Hallym University symbol (the title bar's logo, the first screen's card,
+the application icon, the installer's side band) and the university's
+characters Haram (하람) and Hari (하리) belong to Hallym University.  They are
+the Hallym MIPS Simulator's (v2.8.0), as they are.  The program contains no
+video or photograph of the university: the first screen's background is drawn
+by the program itself.
 
 They appear in this software only to identify it as a teaching tool for
 Hallym University's courses.
@@ -162,6 +164,6 @@ forks or redistributes this project must remove them, unless Hallym University
 has given its own permission.
 
 Where they are:
-  electron/src/renderer/assets/hallym/   marks, characters and the video (README.md there)
+  electron/src/renderer/assets/hallym/   marks and characters (README.md there)
   electron/packaging/icons/              the application icon, made from the symbol
   electron/packaging/*.bmp               the installer's side band, with the symbol
