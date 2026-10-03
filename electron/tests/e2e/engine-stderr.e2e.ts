@@ -82,11 +82,12 @@ test("the program's own fd 2 is in the Console", async () => {
 });
 
 test("a new settings folder: java.util.prefs' line goes to the log, not the Console", async () => {
-  // On Windows java.util.prefs keeps settings in the registry (HKCU\Software\JavaSoft\Prefs), not
-  // in java.util.prefs.userRoot: no folder, no "Created" line (CI, 5a90f3c: no folder in 15 s).
-  // JAVA_TOOL_OPTIONS below is the noise there; the mutants run this one on Linux.
+  // The app's own factory (probe/src/HallymPrefs.java) says nothing; the JDK's file backend is
+  // put back here for the noise it makes when it creates its folder (Linux, macOS).  On Windows
+  // its backend is the registry: no folder, no line -- JAVA_TOOL_OPTIONS below is the noise there,
+  // and the mutants run this one on Linux.
   test.skip(process.platform === 'win32', 'java.util.prefs is the registry on Windows');
-  r = opened = await launch();
+  r = opened = await launch(undefined, { env: { ENGINE_JAVA_ARGS: '-Djava.util.prefs.PreferencesFactory=java.util.prefs.FileSystemPreferencesFactory' } });
   await openAndAssemble(r, program(r.dir, 'q.s', QUIET));
   const prefs = path.join(runDir(), 'rars-prefs-main');
   await restartMain(() => rmSync(prefs, { recursive: true, force: true }));

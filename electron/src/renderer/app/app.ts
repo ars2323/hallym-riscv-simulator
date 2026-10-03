@@ -354,8 +354,8 @@ const asmRoom = (): number => Math.max(ASM_LEAST, paneEditor.clientHeight - edit
 
 function layout(): void {
   stageWelcome.hidden = open;
-  document.body.classList.toggle('first-screen', !open); // its bars over the photo (app.css), the caption patch (updateOverlay)
-  firstScreen.show(!open); // the video plays on the first screen only
+  document.body.classList.toggle('first-screen', !open); // its bars over the board (app.css), the caption patch (updateOverlay)
+  firstScreen.show(!open); // the board runs on the first screen only
   split.hidden = !open;
   viewSwitch.hidden = !open || !narrow;
   split.classList.toggle('narrow', narrow);
@@ -1370,7 +1370,7 @@ function showCongrats(): void {
 // ---- the caption buttons' patch -----------------------------------------------------------
 // Windows draws the minimise / maximise / close buttons on a patch the page
 // cannot paint (titleBarOverlay).  On the first screen, whose title bar is
-// dark glass over the photo, the patch is transparent and the symbols white.
+// dark over the board, the patch is transparent and the symbols white.
 // Elsewhere, while the tutorial dims the window, or a dialog's backdrop
 // covers it, the patch takes the colour white has under the same layers
 // (logic/overlay.ts), or it would stay a bright square at the top right;

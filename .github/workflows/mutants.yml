@@ -58,7 +58,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: Xvfb, ImageMagick (the start screen's screen capture), ffmpeg (the start clip's motion)
+      - name: Xvfb, ImageMagick (the start screen's screen capture), ffmpeg (tools/start-film.ts)
         run: sudo apt-get update -q && sudo apt-get install -y -q xvfb imagemagick ffmpeg
 
       - name: The engine and the app's packages (the SessionStart hook)
@@ -107,7 +107,9 @@ jobs:
           exit $status
 
       - name: The baseline this pass makes (commit it by hand as electron/tools/mutants-baseline.json)
-        run: node tools/mutants.ts --baseline-from mutants.json --run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" | tee baseline.json
+        run: |
+          set -o pipefail   # tee would hide the tool's failure
+          node tools/mutants.ts --baseline-from mutants.json --run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" | tee baseline.json
 
       - name: Upload the results
         if: always()

@@ -186,7 +186,7 @@ if ($finish) {
   # and one picture of the window about 200 ms in.  The click is posted,
   # not sent: sent, it came back only when the installer had seen the
   # program up (the first try's first sample was 579 ms after the window
-  # was found, the video already playing); and everything is run once
+  # was found, the board already growing); and everything is run once
   # before it, whose first run alone took half a second.
   Add-Type -AssemblyName System.Windows.Forms
   Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class Post { [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, int m, IntPtr w, IntPtr l); }'
@@ -232,20 +232,20 @@ if ($finish) {
   for ($i = 0; $i -lt 60 -and -not $app; $i++) { Start-Sleep -Milliseconds 500; $app = Get-Process HallymRISCV -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1 }
   Check ($null -ne $app) 'the program started'
   if ($app) {
-    Start-Sleep -Seconds 6 # the first screen's video playing
+    Start-Sleep -Seconds 9 # the first screen's board grown (about 8.5 s)
     $app.Refresh()
     Shot $app.MainWindowHandle 'installer-started.png'
-    # What this launch shows behind the card -- the video, or the still:
+    # What this launch shows behind the card -- the board still moving, or not:
     # Windows' "animation effects" (SPI_GETCLIENTAREAANIMATION) is what
     # prefers-reduced-motion follows; and whether the picture moves.
     Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class Spi { [DllImport("user32.dll")] public static extern bool SystemParametersInfo(uint a, uint b, ref bool c, uint d); }'
     $anim = $false; [void][Spi]::SystemParametersInfo(0x1042, 0, [ref]$anim, 0)
-    Note "Windows animation effects (SPI_GETCLIENTAREAANIMATION): $anim -- off means prefers-reduced-motion, the still only"
+    Note "Windows animation effects (SPI_GETCLIENTAREAANIMATION): $anim -- off means prefers-reduced-motion, the settled board only"
     $ar = New-Object Ui+RECT; [void][Ui]::GetWindowRect($app.MainWindowHandle, [ref]$ar)
     $grab = { $bm = New-Object System.Drawing.Bitmap 400, 120; $gr = [System.Drawing.Graphics]::FromImage($bm); $gr.CopyFromScreen($ar.Left + 60, $ar.Top + 80, 0, 0, $bm.Size); $gr.Dispose(); $bm }
     $a1 = & $grab; Start-Sleep -Seconds 2; $a2 = & $grab
     $diff = 0; for ($y = 0; $y -lt 120; $y += 4) { for ($x = 0; $x -lt 400; $x += 4) { $c1 = $a1.GetPixel($x, $y); $c2 = $a2.GetPixel($x, $y); $diff += [Math]::Abs($c1.R - $c2.R) + [Math]::Abs($c1.G - $c2.G) + [Math]::Abs($c1.B - $c2.B) } }
-    Note ("the start screen's background over 2 s: mean change {0:N1} per pixel ({1})" -f ($diff / 3000), $(if ($diff / 3000 -gt 2) { 'moving: the video' } else { 'still: no video' }))
+    Note ("the start screen's background over 2 s: mean change {0:N1} per pixel ({1})" -f ($diff / 3000), $(if ($diff / 3000 -gt 2) { 'moving: the pulses over the board' } else { 'still: nothing moving' }))
     # The tree as a student's launch makes it (not Playwright's), and the app
     # killed outright there: taskkill /F on the engines' parent alone, no /T.
     $procs = @(Get-CimInstance Win32_Process -Filter "Name='HallymRISCV.exe' or Name='java.exe'")

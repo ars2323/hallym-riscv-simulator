@@ -1,9 +1,9 @@
 # Turns Windows' "animation effects" on -- as on the students' PCs (Windows
 # 10 and 11 have them on by default) -- since the runner has them off.
 # Chromium's prefers-reduced-motion follows this setting
-# (SPI_GETCLIENTAREAANIMATION), and with it off the first screen shows its
-# still instead of the video: the installer check's picture of the program
-# 마침 starts (check-installer-ui.ps1) would never show the video playing.
+# (SPI_GETCLIENTAREAANIMATION), and with it off the first screen draws its
+# settled board at once and nothing moves: the installer check's picture of
+# the program 마침 starts (check-installer-ui.ps1) would never show it grow.
 # Playwright's own launches force "no preference" whatever this says, so the
 # e2e do not depend on it.
 #

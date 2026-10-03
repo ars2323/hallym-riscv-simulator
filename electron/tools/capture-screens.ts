@@ -6,9 +6,11 @@
    The examples and step counts are written below, so a round's shots can
    be laid over the last round's.  The whole window at 1280x800 unless the
    name says otherwise; no mouse cursor, hover or tooltip in any of them
-   (the pointer is moved out of the window and checked).  Each PNG is
-   written without its ancillary chunks (metadata), losslessly, and must
-   stay within 400 KB.
+   (the pointer is moved out of the window and checked).  Each is a WebP
+   (tools/webp.ts): the window's screens lossless, the first screen lossy --
+   thin bright lines on a dark ground, which JPEG does worst.  Whole windows
+   within 400 KB, crops within 150 KB (tests/docs/pictures.test.ts holds every
+   picture of the documents to it).
 
    A picture whose pixels did not change is not written again, so a
    retake leaves in git only the screens that changed.  "Did not change":
@@ -19,13 +21,14 @@
    clock is fixed (FIXED_TIME): the Assemble panel and the band show the
    time of the assemble.
 
-   windows-frame.png: only on Windows (the CI job, with the installed app),
+   windows-frame.webp: only on Windows (the CI job, with the installed app),
    the whole screen with the window maximised -- the caption buttons are the
    system's and a page capture has none.
 
-   The first screen has the university's video behind it: those shots stop
-   it at a fixed second (the same picture every round) and are JPEG -- as
-   PNG a video frame is 500 KB and more.  start-frame-1, start and
+   The first screen has the circuit board behind it
+   (src/renderer/startfield/): those shots put its opening at a fixed
+   moment, which is the same picture every round because the board is
+   settled by its seed and the window alone.  start-frame-1, start and
    start-frame-3 are three moments of it; start-<width> and start-2-<width>
    the two steps at the other widths.
 
@@ -42,6 +45,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSy
 import path from 'node:path';
 
 import { launch as launchApp, openAndAssemble, openOnly, program, root, sample, settled, textRow, type Running } from '../tests/e2e/harness.ts';
+import { mime, pixels, toWebp, type Quality } from './webp.ts';
 
 // Every window of the set with the same clock (the assembled time on screen).
 const FIXED_TIME = new Date('2026-09-28T10:00:00+09:00');
@@ -81,56 +85,39 @@ next:
 fun:
     ret
 `;
-const MAX_BYTES = 400 * 1024;
-const MAX_SCREEN_BYTES = 700 * 1024; // a whole Windows screen, up to 1920x1080
+const MAX_BYTES = 400 * 1024;      // tests/docs/pictures.test.ts: the same caps for every picture of the documents
 const MAX_CROP_BYTES = 150 * 1024;
-const MAX_PHOTO_BYTES = 250 * 1024; // a JPEG over the first screen's video
-const START_AT = 3.0;               // the video's second in start.jpg and the other widths' shots
+/* The first screen, lossy: the board the program draws is a field of thin
+   bright lines on a dark ground, which JPEG does worst (the MIPS edition
+   went from quality 85 to 78 to stay under 250 KB); WebP holds them. */
+const PHOTO_QUALITY = 0.85;
+const START_AT = 12.0;              // the board settled: it grows for about 8.5 s (startfield/)
 
-// PNG without its ancillary chunks: the signature, then IHDR, PLTE, tRNS,
-// IDAT and IEND only.  The pixels are untouched.
-function stripPng(file: string): number {
-  const b = readFileSync(file);
-  const keep = new Set(['IHDR', 'PLTE', 'tRNS', 'IDAT', 'IEND']);
-  const parts = [b.subarray(0, 8)];
-  for (let at = 8; at < b.length;) {
-    const end = at + 12 + b.readUInt32BE(at);
-    if (keep.has(b.toString('latin1', at + 4, at + 8))) parts.push(b.subarray(at, end));
-    at = end;
-  }
-  const png = Buffer.concat(parts);
-  writeFileSync(file, png);
-  return png.length;
-}
-
-// The same picture, noise aside (see above; decoded by the running app's
-// nativeImage: PNG and JPEG).
+// The same picture, noise aside (see above; both decoded by the page).
 async function samePicture(r: Running, a: string, b: string): Promise<boolean> {
-  return r.app.evaluate(({ nativeImage }, [x, y]) => {
-    const p = nativeImage.createFromPath(x), q = nativeImage.createFromPath(y);
-    const sp = p.getSize(), sq = q.getSize();
-    if (p.isEmpty() || q.isEmpty() || sp.width !== sq.width || sp.height !== sq.height) return false;
-    const u = p.toBitmap(), v = q.toBitmap();
-    let noisy = 0;
-    for (let i = 0; i < u.length; i += 4) {
-      const d = Math.max(Math.abs(u[i] - v[i]), Math.abs(u[i + 1] - v[i + 1]), Math.abs(u[i + 2] - v[i + 2]));
-      if (d > 24) return false;
-      if (d > 2 && ++noisy > 20) return false;
-    }
-    return true;
-  }, [a, b]);
+  const p = await pixels(r, readFileSync(a), mime(a)), q = await pixels(r, readFileSync(b), mime(b));
+  if (p.width !== q.width || p.height !== q.height) return false;
+  let noisy = 0;
+  for (let i = 0; i < p.data.length; i += 4) {
+    const d = Math.max(Math.abs(p.data[i] - q.data[i]), Math.abs(p.data[i + 1] - q.data[i + 1]), Math.abs(p.data[i + 2] - q.data[i + 2]));
+    if (d > 24) return false;
+    if (d > 2 && ++noisy > 20) return false;
+  }
+  return true;
 }
-// `fresh` (just captured) becomes `file`, unless `file` already holds the same picture.
-async function settle(r: Running, fresh: string, file: string, max: number): Promise<void> {
-  const bytes = file.endsWith('.png') ? stripPng(fresh) : readFileSync(fresh).length;
-  if (bytes > max) throw new Error(`${path.basename(file)} is ${bytes} bytes, over ${max}: crop it`);
+// A capture (PNG bytes) becomes `file` as WebP, unless `file` already holds the same picture.
+async function settle(r: Running, png: Buffer, file: string, max: number, quality: Quality): Promise<void> {
+  const webp = await toWebp(r, png, quality);
+  if (webp.length > max) throw new Error(`${path.basename(file)} is ${webp.length} bytes, over ${max}: crop it`);
+  const fresh = freshName(file);
+  writeFileSync(fresh, webp);
   if (existsSync(file) && await samePicture(r, fresh, file)) {
     unlinkSync(fresh);
     console.log(`same     ${path.relative(root, file)}`);
     return;
   }
   renameSync(fresh, file);
-  console.log(`wrote    ${path.relative(root, file)} (${Math.round(bytes / 1024)} KB)`);
+  console.log(`wrote    ${path.relative(root, file)} (${Math.round(webp.length / 1024)} KB)`);
 }
 const freshName = (file: string) => file.replace(/(\.\w+)$/, '.new$1');
 
@@ -145,32 +132,41 @@ async function still(r: Running, name: string): Promise<void> {
 }
 async function shot(r: Running, name: string, clip?: { x: number; y: number; width: number; height: number }): Promise<void> {
   await still(r, name);
-  const file = path.join(out, `${name}.png`);
-  await r.page.screenshot({ path: freshName(file), clip });
-  await settle(r, freshName(file), file, clip ? MAX_CROP_BYTES : MAX_BYTES);
+  const file = path.join(out, `${name}.webp`);
+  await settle(r, await r.page.screenshot({ clip }), file, clip ? MAX_CROP_BYTES : MAX_BYTES, 'lossless');
 }
-// Over the first screen's video: JPEG.
+// The first screen's board: lossy WebP.
 async function photo(r: Running, name: string): Promise<void> {
   await still(r, name);
-  const file = path.join(out, `${name}.jpg`);
-  await r.page.screenshot({ path: freshName(file), type: 'jpeg', quality: 85 });
-  await settle(r, freshName(file), file, MAX_PHOTO_BYTES);
+  const file = path.join(out, `${name}.webp`);
+  await settle(r, await r.page.screenshot(), file, MAX_BYTES, PHOTO_QUALITY);
 }
-// The first screen's video, stopped at `t` seconds, that frame on screen.
-async function videoAt(r: Running, t: number): Promise<void> {
-  await r.page.waitForSelector('.wback.playing');
+// The first screen's board (src/renderer/startfield/), put at `t` seconds
+// of its opening -- the same picture every round, with no clip to seek.
+async function boardAt(r: Running, t: number): Promise<void> {
+  await r.page.waitForSelector('.startfield canvas');
+  /* The board is grown after the fonts are ready, which is a frame or two
+     after the canvas is in the document.  Stepping the clock before then
+     drew nothing and left the loop running, and the picture was then of
+     whatever moment the shot happened to catch: that is what rewrote two to
+     seven of these on every capture, for rounds. */
+  await r.page.waitForFunction(() => (window as unknown as {
+    __startfield: { geometry(): unknown } }).__startfield.geometry() !== undefined);
+  // The window settling its size sets the board off again (a ResizeObserver
+  // behind a 180 ms debounce), which would start the clock over after the
+  // moment was put where it was wanted.
+  await r.page.waitForTimeout(400);
   await r.page.evaluate((t) => new Promise<void>((done) => {
-    const v = document.querySelector('.wback video') as HTMLVideoElement;
-    v.pause();
-    v.addEventListener('seeked', () => requestAnimationFrame(() => requestAnimationFrame(() => done())), { once: true });
-    // The middle of that frame (the clip is 30 a second): 3.0 s is the boundary of frames 89 and
-    // 90, and a seek to a boundary may land on either.
-    v.currentTime = t + 1 / 60;
+    (window as unknown as { __startfield: { stepTo(ms: number): void } }).__startfield.stepTo(t * 1000);
+    requestAnimationFrame(() => requestAnimationFrame(() => done()));
   }), t);
+  // And a moment more for the compositor to put it on the screen: a shot
+  // taken before that comes back as the frame before it.
+  await r.page.waitForTimeout(20);
 }
 
 // A shot of the set, also as one of the guide's pictures (copied only when it differs).
-function forGuide(from: string, name: string, ext = 'png'): void {
+function forGuide(from: string, name: string, ext = 'webp'): void {
   const source = path.join(out, `${from}.${ext}`), target = path.join(guide, `${name}.${ext}`);
   if (existsSync(target) && readFileSync(target).equals(readFileSync(source))) {
     console.log(`same     ${path.relative(root, target)} (= ${from}.${ext})`);
@@ -208,11 +204,10 @@ async function namedParts(r: Running, name: string): Promise<void> {
     }
     document.body.append(layer);
   }, PARTS);
-  const file = path.join(guide, `${name}.png`);
+  const file = path.join(guide, `${name}.webp`);
   await r.page.mouse.move(-10, -10);
   await r.page.waitForTimeout(1100);
-  await r.page.screenshot({ path: freshName(file) });
-  await settle(r, freshName(file), file, MAX_BYTES);
+  await settle(r, await r.page.screenshot(), file, MAX_BYTES, 'lossless');
   await r.page.evaluate(() => document.getElementById('guide-names')?.remove());
 }
 
@@ -235,11 +230,11 @@ async function lab04(r: Running): Promise<void> {
 {
   const r = await launch({ width: 1280, height: 800 });
   const { page } = r;
-  // Three moments of the video: 0.5 s, start.jpg's own 3.0 s (taken below), 5.5 s.
-  for (const [n, t] of [[1, 0.5], [3, 5.5]]) { await videoAt(r, t); await photo(r, `start-frame-${n}`); }
-  await videoAt(r, START_AT);
+  // Three moments of the board's opening: 1.0 s, 5.0 s and start's own, settled (START_AT).
+  for (const [n, t] of [[1, 1.0], [3, 5.0]]) { await boardAt(r, t); await photo(r, `start-frame-${n}`); }
+  await boardAt(r, START_AT);
   await photo(r, 'start');
-  forGuide('start', '01-start', 'jpg');
+  forGuide('start', '01-start');
   await page.getByRole('button', { name: /바로 시작/ }).click();
   await photo(r, 'start-2');
   await openOnly(r, sample(r.dir, LAB04, 'lab04.s'));
@@ -314,7 +309,7 @@ for (const [name, size, scale] of [
   ['1920', { width: 1920, height: 1040 }, '1'],
 ] as const) {
   const r = await launch(size, { switches: [`--force-device-scale-factor=${scale}`] });
-  await videoAt(r, START_AT);
+  await boardAt(r, START_AT);
   await photo(r, `start-${name}`);
   await r.page.getByRole('button', { name: /바로 시작/ }).click();
   await photo(r, `start-2-${name}`);
@@ -421,11 +416,12 @@ async function tutorialStep(r: Running, n: number): Promise<void> {
   await r.close();
 }
 
-// The whole screen, as Windows draws it (the caption buttons included).
-function screen(name: string): void {
+// The whole screen, as Windows draws it (the caption buttons included):
+// taken as PNG by the system, kept as lossless WebP (encoded by the app).
+async function screen(r: Running, name: string): Promise<void> {
   // The real pointer onto the empty right end of the status bar (nothing
   // there reacts to it); CopyFromScreen does not draw the cursor.
-  const file = path.join(out, `${name}.png`);
+  const png = path.join(out, `${name}.capture.png`);
   const ps = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $w = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
@@ -434,12 +430,12 @@ Start-Sleep -Milliseconds 500
 $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
 $g = [System.Drawing.Graphics]::FromImage($bmp)
 $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-$bmp.Save('${file}', [System.Drawing.Imaging.ImageFormat]::Png)`;
+$bmp.Save('${png}', [System.Drawing.Imaging.ImageFormat]::Png)`;
   const done = spawnSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8' });
   if (done.status !== 0) throw new Error(`${name}: ${done.stderr}`);
-  const bytes = stripPng(file);
-  console.log(`wrote    ${path.relative(root, file)} (${Math.round(bytes / 1024)} KB)`);
-  if (bytes > MAX_SCREEN_BYTES) throw new Error(`${name}.png is ${bytes} bytes, over ${MAX_SCREEN_BYTES}`);
+  const bytes = readFileSync(png);
+  unlinkSync(png);
+  await settle(r, bytes, path.join(out, `${name}.webp`), MAX_BYTES, 'lossless');
 }
 if (process.platform === 'win32') {
   const r = await launch();
@@ -447,13 +443,13 @@ if (process.platform === 'win32') {
   await r.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await r.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].maximize());
   await r.page.waitForTimeout(1500);
-  screen('windows-frame');
+  await screen(r, 'windows-frame');
   await r.close();
   // The tutorial on, maximised: the caption buttons' patch coloured with the dim.
   const t = await launch();
   await tutorialStep(t, 14);
   await t.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].maximize());
   await t.page.waitForTimeout(1500);
-  screen('windows-frame-tutorial');
+  await screen(t, 'windows-frame-tutorial');
   await t.close();
 }

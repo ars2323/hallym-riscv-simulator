@@ -12,9 +12,14 @@
    6. stop() kills an engine that does not answer (a fake engine here).
    7. How java is started: java itself (no shell), no console window, in
       the parent's job object, told the parent's pid.
+   8. RARS's settings: nowhere but the engine's own folder, and there only
+      when RARS flushes them (probe/src/HallymPrefs.java).  Control: the
+      JDK's own file backend (Linux, macOS) leaves its .java folder.
    (The MIPS edition's process.test.ts, for the JVM engine.) */
 
 import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
@@ -250,4 +255,36 @@ test('7: the executable is java (java.exe), not a .bat, .cmd or launcher -- from
     Object.defineProperty(process, 'platform', platform);
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
+});
+
+// An engine started as the app starts it, run to its end; what it left on disk.
+async function runOnce(extraArgs: string[]): Promise<{ engine: string; home: string; left: string[] }> {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'prefs-'));
+  const engine = path.join(dir, 'rars-prefs-main'), home = path.join(dir, 'home');
+  const { java, classpath } = (await import('../../src/main/paths.ts')).engine();
+  const t = engineTransport({ java, classpath, prefsDir: engine, extraArgs }, { ...process.env, HOME: home, USERPROFILE: home });
+  await new Promise<void>((done, fail) => {
+    const cap = setTimeout(() => fail(new Error('no end of the run within 30 s')), 30_000);
+    t.onMessage((m) => {
+      const msg = m as { ev?: string; id?: number };
+      if (msg.ev === 'ready') t.send({ id: 1, cmd: 'assemble', source: 'main:\n  li a7, 10\n  ecall\n' });
+      if (msg.id === 1) t.send({ id: 2, cmd: 'run' });
+      if (msg.id === 2) t.send({ id: 3, cmd: 'quit' });
+    });
+    t.onExit(() => { clearTimeout(cap); done(); });
+  });
+  const left = existsSync(dir) ? readdirSync(dir, { recursive: true }).map(String) : [];
+  rmSync(dir, { recursive: true, force: true });
+  return { engine, home, left };
+}
+
+test("8: RARS's settings: no trace in the home folder or of the JDK's backend", async () => {
+  const { left } = await runOnce([]);
+  assert.deepEqual(left.filter((f) => f.startsWith('home') && f !== 'home'), [], `in the home folder: ${left}`);
+  assert.deepEqual(left.filter((f) => f.includes('.java')), [], `the JDK's own backend wrote: ${left}`);
+});
+
+test("8, negative control: the JDK's file backend leaves its folder", { skip: process.platform === 'win32' && 'Windows: its backend is the registry (tests/e2e/registry.e2e.ts)' }, async () => {
+  const { left } = await runOnce(['-Djava.util.prefs.PreferencesFactory=java.util.prefs.FileSystemPreferencesFactory']);
+  assert.ok(left.some((f) => f.includes('.java')), `nothing written: ${left}`);
 });

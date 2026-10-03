@@ -30,8 +30,8 @@ export function overlayColor(tutorial: boolean, dialog: boolean): string {
 }
 
 // The patch and its symbols' colour.  On the first screen the title bar is
-// dark glass over the photo: the patch is transparent there (Windows takes
-// the alpha: docs/start-variants/combined/README.md), so the bar shows
+// dark over the board: the patch is transparent there (Windows takes the
+// alpha, measured in the MIPS edition's docs/start-variants/combined/), so the bar shows
 // through it -- and so does whatever covers the page -- and the symbols are
 // white.  Everywhere else the bar is white: the patch white, or white under
 // what covers the page, with navy symbols.

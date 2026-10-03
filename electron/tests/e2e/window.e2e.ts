@@ -16,6 +16,40 @@ const symbols = (r: Running) => r.app.evaluate(({ BrowserWindow }) => (BrowserWi
 const visibleHarams = (r: Running) => r.page.evaluate(() => [...document.querySelectorAll('img.char')]
   .filter((e) => e.checkVisibility({ visibilityProperty: true })).map((e) => (e.closest('dialog') ? 'dialog' : e.closest('.tut-card') ? 'card' : 'panel')));
 
+/* Every title the window has from its first moment: the page loaded again
+   with a recorder put in before any of its own scripts (the <title> as the
+   parser puts it in, and every change after), and the window's own title as
+   Electron hands it to Windows (page-title-updated, and getTitle after).  The MIPS edition's
+   <title> stood there for the first second until 87a9531; read after the
+   start, as the test below does, that second was never seen. */
+test('the window\'s title is Hallym RISC-V at every moment, from the first', async () => {
+  const r = await launch();
+  try {
+    await r.app.evaluate(({ BrowserWindow }) => {
+      const w = BrowserWindow.getAllWindows()[0] as unknown as { webContents: Electron.WebContents; __titles: string[] };
+      w.__titles = [];
+      w.webContents.on('page-title-updated', (_e, t) => w.__titles.push(t));
+    });
+    await r.page.addInitScript(() => {
+      const seen: string[] = [];
+      (window as unknown as { __titles: string[] }).__titles = seen;
+      const note = (): void => { const t = document.title; if (seen[seen.length - 1] !== t) seen.push(t); };
+      new MutationObserver(note).observe(document, { subtree: true, childList: true, characterData: true });
+    });
+    await r.page.reload();
+    await r.page.waitForSelector('.wcard');
+    const page = await r.page.evaluate(() => (window as unknown as { __titles: string[] }).__titles);
+    const win = await r.app.evaluate(({ BrowserWindow }) => (BrowserWindow.getAllWindows()[0] as unknown as { __titles: string[] }).__titles);
+    console.log(`titles: the page ${JSON.stringify(page)}, the window ${JSON.stringify(win)}`);
+    expect(page.length, 'the page\'s title was never seen').toBeGreaterThan(0);
+    // Electron hands a title on only when it changes: none at all is the right answer here.
+    const now = await r.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getTitle());
+    for (const t of [...page, ...win, now]) expect(t).toBe('Hallym RISC-V');
+  } finally {
+    await r.close();
+  }
+});
+
 // The window's title is what Windows shows in the taskbar and Alt+Tab: the
 // page's <title> becomes it once the page loads (index.html said "Hallym
 // MIPS" until 87a9531: the Windows CI saw that title on the first screen).
@@ -46,7 +80,7 @@ test('the caption buttons\' patch: see-through with white symbols on the first s
   const r = await launch();
   const { page } = r;
   try {
-    // Its title bar is dark glass over the photo: the patch shows it (and a dialog's backdrop) through.
+    // Its title bar is dark over the board: the patch shows it (and a dialog's backdrop) through.
     await expect.poll(() => overlay(r)).toBe('#00000000');
     expect(await symbols(r)).toBe('#ffffff');
     await page.getByTitle('Settings').click();

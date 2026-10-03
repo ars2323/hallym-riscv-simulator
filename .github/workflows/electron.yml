@@ -172,7 +172,7 @@ jobs:
 
       # Windows' animation effects on, as on the students' PCs: with them off
       # (the runner's default) Chromium reports prefers-reduced-motion and the
-      # first screen shows its still instead of the video.
+      # first screen draws its settled board at once, with nothing moving.
       - name: Animation effects on (tools/windows/animations-on.ps1)
         continue-on-error: true
         shell: powershell
@@ -280,6 +280,18 @@ jobs:
           $env:SCREENS_OUT = 'report/screens'
           node tools/capture-screens.ts
 
+      # The first screen draws itself, so what a frame of it costs is a number
+      # this platform has to give: the lab PCs have built-in graphics and the
+      # local figures come off a developer's machine (MIPS 2.8.0's step).
+      - name: The first screen's frame cost, on Windows (tools/start-cost.ts -- numbers, not a check)
+        if: ${{ !cancelled() && hashFiles('electron/report/installed.txt') != '' }}
+        continue-on-error: true
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $env:SPIM_E2E_EXE = (Get-Content report/installed.txt).Trim()
+          node tools/start-cost.ts --json report/start-cost.json
+
       - name: Uninstall the silent install
         if: always() && hashFiles('electron/report/installed.txt') != ''
         shell: pwsh
@@ -347,21 +359,33 @@ jobs:
         with:
           name: windows-report
           path: windows-report
+      # cwebp: the installer's pictures come off the runner as PNG
+      # (System.Drawing has no WebP); the documents keep WebP only, 400 KB
+      # at most (tools/pictures.ts).
+      - name: cwebp
+        run: sudo apt-get update -q && sudo apt-get install -y -q webp
       - name: Into electron/docs/screens/, one commit, pushed to main
         run: |
           set -euo pipefail
           [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ] || { echo "::error::main moved on from $GITHUB_SHA: nothing committed"; exit 1; }
-          find windows-report -type f \( -name '*.png' -o -name '*.txt' \) | sort | head -80
+          find windows-report -type f \( -name '*.png' -o -name '*.webp' -o -name '*.txt' \) | sort | sed -n 1,80p
           out=electron/docs/screens
+          # The installer's pages, lossless; the program it started (the board over the whole screen), lossy.
           for f in installer-progress installer-finish installer-started uninstaller-finish; do
-            src=$(find windows-report -path '*installer*' -name "$f.png" | head -1)
+            src=$(find windows-report -path '*installer*' -name "$f.png" -print -quit)
             [ -n "$src" ] || { echo "::error::no $f.png in the report"; exit 1; }
-            cp "$src" "$out/$f.png"
+            if [ "$f" = installer-started ]; then cwebp -quiet -q 85 "$src" -o "$out/$f.webp"; else cwebp -quiet -lossless "$src" -o "$out/$f.webp"; fi
           done
+          # Windows' own frame, already WebP (tools/capture-screens.ts).
           for f in windows-frame windows-frame-tutorial; do
-            src=$(find windows-report -path '*screens*' -name "$f.png" | head -1)
-            [ -n "$src" ] || { echo "::error::no $f.png in the report"; exit 1; }
-            cp "$src" "$out/$f.png"
+            src=$(find windows-report -path '*screens*' -name "$f.webp" -print -quit)
+            [ -n "$src" ] || { echo "::error::no $f.webp in the report"; exit 1; }
+            cp "$src" "$out/$f.webp"
+          done
+          for f in installer-progress installer-finish installer-started uninstaller-finish windows-frame windows-frame-tutorial; do
+            bytes=$(stat -c %s "$out/$f.webp")
+            echo "$f.webp $bytes bytes"
+            [ "$bytes" -le 409600 ] || { echo "::error::$f.webp is $bytes bytes, over 400 KB (tools/pictures.ts): nothing committed"; exit 1; }
           done
           git add "$out"
           if git diff --cached --quiet; then echo "the pictures are those already committed"; exit 0; fi
@@ -516,6 +540,7 @@ jobs:
 
       - name: The version, the notes, the installer, its SHA-256
         run: |
+          set -o pipefail
           version="${GITHUB_REF_NAME#v}"
           package=$(node -p "require('./electron/package.json').version")
           [ "$package" = "$version" ] || { echo "::error::the tag is $GITHUB_REF_NAME but electron/package.json says $package"; exit 1; }
@@ -537,6 +562,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -o pipefail
           gh release create "$GITHUB_REF_NAME" "$SETUP" --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "Hallym RISC-V ${GITHUB_REF_NAME#v}" --notes-file release-notes.md --latest
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json url,isDraft,isPrerelease,assets \
