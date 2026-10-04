@@ -1957,3 +1957,21 @@ is in it.
 5. **Stale lines about the video in MIPS 2.8.1's documents**: `docs/ARCHITECTURE.md` (the test table's "first
    screen's video" row and `backdrop` in the panels list) and `src/renderer/assets/hallym/README.md` (characters
    "on the first screen", the video behind the card). Fixed here.
+
+### 1.0.1 목록 (left for 1.0.1, not done in 1.0.0)
+
+- `start-1093.webp` / `start-2-1093.webp` are rewritten on most retakes: rasteriser noise at 1.25× (one level on
+  150-185 pixels) amplified by lossy WebP past the "did not change" rule (`docs/screens/README.md`).
+- The console-window check's control is BLOCKED on the CI runner (`WINDOWS.md`); `windowsHide` is held by its
+  unit test and mutant only.
+- The frame cost's tail allowance (1 % of the frames over the worst-frame budget) is tight against the sample:
+  2 of 226 settled frames against an allowance of 2, in a busy container.
+- "Killed outright": under Playwright on the Windows runner the two engines were still running 10 s after the
+  program was killed (CI, 4faba4d), against 250 ms when it is started as a student starts it; the test now ends
+  them itself, since what it checks is the folder.
+- The reduced-motion test's "nothing of the card's light" was blind with this seed (the board settles at a
+  moment no light is lit); it now also looks at the name's light's peak. The MIPS edition's test has the same
+  blind spot for any seed like this one.
+- To MIPS 2.8.2: the list above ("MIPS 2.8.2 로 역이식할 것") -- the ink centring, measured on the fixed parts
+  only and not again at a step change; `set -o pipefail`; WebP pictures with the cap checked; the minimised-
+  and-restored double-paint check and the ResizeObserver teardown check.

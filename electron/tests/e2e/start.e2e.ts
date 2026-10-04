@@ -688,6 +688,14 @@ test('prefers-reduced-motion: the settled board at once, and nothing moving', as
     expect(still.names, 'something on the card is animated').toEqual(['none']);
     expect(still.amps.every((v) => v === '' || Number(v) === 0),
       `the card's light is running: ${still.amps.join(', ')}`).toBe(true);
+    // At the moment the board settles no light happens to be lit with this
+    // seed, so the card is looked at again at the name's light's peak too.
+    const peak = peakAt('title', offsets(SEED).title, 11000);
+    const lit = await page.evaluate((ms) => {
+      (window as unknown as { __startfield: { stepTo(ms: number): void } }).__startfield.stepTo(ms);
+      return (document.querySelector('.wtitle') as HTMLElement).style.getPropertyValue('--sp-amp');
+    }, peak);
+    expect(lit === '' || Number(lit) === 0, `the name lit at ${peak} ms with motion turned down: ${lit}`).toBe(true);
     // The board is there in full, drawn once.
     const drawn = await page.evaluate(() => (window as unknown as {
       __startfield: { boardDraws(): number; frames(): number } }).__startfield.boardDraws());
