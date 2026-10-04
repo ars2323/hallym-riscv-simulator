@@ -7,10 +7,11 @@
    not here.) */
 
 import { expect, test } from '@playwright/test';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { goneWithin, javaPids } from '../helpers/processes.ts';
 import { launch, openAndAssemble, root, type Running, sample } from './harness.ts';
 
 const VERSION = (JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as { version: string }).version;
@@ -110,4 +111,38 @@ test('About: version, RARS, and every notice from the files the package carries'
   } finally {
     await r.close();
   }
+});
+
+/* Killed outright -- Task Manager, a crash, the power button on a lab PC --
+   the program never reaches its own clean-up, so its run's folder (Chromium's
+   profile, the engines' logs, RARS's settings in rars-prefs-*) stays in the
+   temporary folder.  The next start removes every run's folder whose program
+   is gone (src/main/main.ts), so they do not pile up.  The kill is checked to
+   have left the folder first: without that the test would pass on a program
+   that cleaned up after itself, and prove nothing about the next start. */
+test('killed outright, its run\'s folder is left; the next start removes it', async () => {
+  const runs = mkdtempSync(path.join(tmpdir(), 'spim-runs-'));
+  const r = await launch({ width: 1280, height: 800 }, { userData: runs });
+  const pid = r.app.process().pid!;
+  await expect.poll(() => javaPids('-Dhallym.engine=', runs).length, { timeout: 30_000, message: 'both engines started' }).toBe(2);
+  const engines = javaPids('-Dhallym.engine=', runs);
+  const [killed] = readdirSync(runs);
+  console.log(`the run's folder: ${killed}: ${readdirSync(path.join(runs, killed)).filter((n) => /^rars-prefs|^engine-/.test(n)).join(', ') || '(no engine files yet)'}`);
+  r.app.process().kill('SIGKILL');                       // TerminateProcess on Windows: no quit, no clean-up
+  expect(await goneWithin([pid], 10_000), 'the program ended').not.toBeNull();
+  expect(await goneWithin(engines, 10_000), 'its engines ended').not.toBeNull();
+  expect(readdirSync(runs), 'the kill left its folder behind (the case this is about)').toContain(killed);
+
+  const again = await launch({ width: 1280, height: 800 }, { userData: runs });
+  try {
+    const now = readdirSync(runs);
+    console.log(`after the next start: ${now.join(', ')}`);
+    expect(now, 'the killed run\'s folder is still there').not.toContain(killed);
+    expect(now.length).toBe(1);
+  } finally {
+    await again.close();
+    rmSync(r.dir, { recursive: true, force: true });
+  }
+  await expect.poll(() => (existsSync(runs) ? readdirSync(runs) : []), { timeout: 20_000 }).toEqual([]);
+  rmSync(runs, { recursive: true, force: true });
 });

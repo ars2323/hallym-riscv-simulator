@@ -1869,9 +1869,12 @@ margin while it is hidden on the first step, so the ink sat 16 px high. Measured
 transparent margins are 0.75 and 0.5 px of 60, which is not it.
 
 Now (`panels/welcome.ts`, `centre()`): the column's visible ink is measured -- the symbol by its pixels'
-alpha (once, when it loads), the name, the buttons, the way back when it shows -- and the column is moved by
-the difference as `--ink-shift` (`.wstack { transform: translateY(var(--ink-shift, 0px)); }`), again on every
-resize, when the fonts are ready, and at each step. Checked (`tests/e2e/start.e2e.ts`, "the column is centred
+alpha (once, when it loads), the name, the two buttons -- and the column is moved by the difference as
+`--ink-shift` (`.wstack { transform: translateY(var(--ink-shift, 0px)); }`), again on every resize and when
+the fonts are ready. The way back is not counted on either step, and a step does not centre again: counting
+it when it shows moved the second step's buttons up 15 px (CI, fdc3609, `editor.e2e.ts` "the first screen
+keeps its shape from one step to the other"), and measuring again at the step moved them 1 px by rounding.
+The two steps hold the same ink, so the first step's move is the second's. Checked (`tests/e2e/start.e2e.ts`, "the column is centred
 in the die frame by its ink, at four window sizes"): above / below within 1.00 ± 0.08. Measured:
 
 | window | above / below | ratio |
@@ -1909,10 +1912,24 @@ the board") are 2.8.1's; killed here.
   every title the page and the window report, through a reload);
 - the documents' pictures are WebP and 400 KB or less (`tools/pictures.ts`, `tests/docs/pictures.test.ts`):
   `installer-started.png` had gone in at 1.8 MB while the screens' README said 400 KB;
+- killed outright, the run's folder (the engines' logs, RARS's settings) is left, and the next start removes
+  it (`settings.e2e.ts`; mutant "the folders of killed runs left to pile up"). The folder is under the
+  system's temporary folder (`%TEMP%\HallymRISCV\run-<pid>-<time>`), and every start removes those whose
+  program is no longer running;
 - minimised and restored, the board runs one loop, not two (`start.e2e.ts`). A count of frames does not show
   two loops under xvfb: the mutant's two chains ran at about 30 frames a second each, 64 in all against 61. What
   shows them is every moment painted twice, once by each chain in the same vsync;
 - leaving the first screen leaves no ResizeObserver on the board.
+
+**What a frame costs is measured differently** (`tests/e2e/frame-cost.e2e.ts`, moved out of `start.e2e.ts`).
+The work of a frame is timed with the wall clock, so a frame during which the thread was off the CPU counts
+time it was not drawing: in a busy container that gave frames of 20-68 ms at a different moment every run.
+The budgets are MIPS 2.8.0's, unchanged (growing 8 / 16 ms, settled 5 / 12 ms); what changed is how they are
+held. The first 1.5 s (the window, two JVMs and the fonts starting) are left out; the gate is the median; the
+tail is a count, frames over 16 (growing) or 12 ms (settled) at most 1 % of the frames; the worst frame and
+p99 are reported only. It runs alone, in its own CI job ("Frame cost, alone") and in its own step on
+Windows against the installed app, and is skipped elsewhere (`SPIM_FRAME_COST=1`). Mutant: "every frame 18 ms
+of work more"; killed. `tools/mutants.ts` gives a mutant's tests an environment of its own for this.
 
 The card's hierarchy floors are half of what was measured here (lift at rest → peak: name 7.17, first way in
 2.50, second 0.82 grey levels; floors 3.6 / 1.25 / 0.41).

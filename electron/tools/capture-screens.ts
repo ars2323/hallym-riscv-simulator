@@ -126,9 +126,20 @@ async function still(r: Running, name: string): Promise<void> {
   await page.mouse.move(-10, -10); // out of the window: no hover, no tooltip
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
   await page.evaluate(() => document.fonts.ready);
+  await layoutSettled(r);
   await page.waitForTimeout(1100); // past the registers' flash
   const hovered = await page.evaluate(() => document.querySelectorAll(':hover').length);
   if (hovered) throw new Error(`${name}: ${hovered} elements still hovered`);
+}
+/* The window laid out for what just changed before a key moves the Editor:
+   as built() waits for the board (tests/e2e/start.e2e.ts).  The error list
+   coming in shrinks the Editor, and CodeMirror measures that a frame or more
+   later; a Ctrl+Home before then left the Editor at 29 px in one take and 31
+   in the next (measured), and the picture was rewritten every round.  With
+   it, both takes end at 3 px.  Also before every picture (still()). */
+async function layoutSettled(r: Running): Promise<void> {
+  await r.page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  await r.page.waitForTimeout(500);
 }
 async function shot(r: Running, name: string, clip?: { x: number; y: number; width: number; height: number }): Promise<void> {
   await still(r, name);
@@ -267,6 +278,7 @@ async function lab04(r: Running): Promise<void> {
   await page.keyboard.insertText('        srll t5, t6, 1\n');
   await page.keyboard.press('Control+s');
   await page.waitForSelector('.asm[data-state=errors]');
+  await layoutSettled(r);
   await page.keyboard.press('Control+Home');
   await shot(r, 'error-kept');
   await assembled(r, sample(r.dir, ERROR));

@@ -44,7 +44,6 @@ function action(label: string, ic: string, onClick: () => void, main = false): H
 export function welcome(events: WelcomeEvents): { root: HTMLElement; show(on: boolean): void } {
   const actions = h('div', { class: 'actions' });
   const back = h('button', { class: 'linkbtn back', type: 'button' }, '← 처음으로');
-  let recentre = (): void => {};   // the column centred by its ink (below), after each step
   /* Straight to work first, the tutorial under it: the one most of them
      want is the one at the top, and the hierarchy of the two -- border,
      words, ground, and the light each carries -- says which is which. */
@@ -53,14 +52,12 @@ export function welcome(events: WelcomeEvents): { root: HTMLElement; show(on: bo
       action('바로 시작', 'play', second, true),
       action('튜토리얼 보기', 'circle-question-mark', events.tutorial));
     back.style.visibility = 'hidden';
-    recentre();
   };
   const second = () => {
     actions.replaceChildren(
       action('새 파일', 'file-plus', events.newFile, true),
       action('파일 열기', 'folder-open', events.openFile));
     back.style.visibility = 'visible';
-    recentre();
     (actions.firstElementChild as HTMLElement).focus();
   };
   back.addEventListener('click', first);
@@ -88,11 +85,16 @@ export function welcome(events: WelcomeEvents): { root: HTMLElement; show(on: bo
      72 px above it and 103 below inside the die frame at 1920x1080, 1.43 : 1
      (MIPS 2.8.0 measured the same on its release's film, 1.42).  And the mark
      is a picture: its own transparent margin is part of its box.  So: the
-     ink's top and bottom -- the mark's from its alpha, a block's from its box,
-     nothing that is hidden -- measured inside the column, and the column moved
-     by what puts their middle on the die frame's.  Measured relative to the
-     column itself, so the move already made does not enter it.  (To go back
-     to MIPS: docs/PORTING.md.) */
+     ink's top and bottom -- the mark's from its alpha, the name's and the two
+     buttons' from their boxes -- measured inside the column, and the column
+     moved by what puts their middle on the die frame's.  Measured relative to
+     the column itself, so the move already made does not enter it.  The way
+     back is left out on both steps, and a step does not centre again: counted
+     when it shows, the second step moved everything up 15 px, and measured
+     again at the step, 1 px (rounding); the screen keeps its shape from one
+     step to the other (tests/e2e/editor.e2e.ts).  The two steps hold the same
+     ink -- the mark, the name, two buttons of one height -- so the move made
+     for the first is the second's.  (To go back to MIPS: docs/PORTING.md.) */
   const stack = card.firstElementChild as HTMLElement;
   const logo = stack.querySelector<HTMLImageElement>('.wlogo')!;
   let logoInk: { top: number; bottom: number } | null = null;   // fractions of the mark's height
@@ -117,7 +119,7 @@ export function welcome(events: WelcomeEvents): { root: HTMLElement; show(on: bo
     const ink = (t: number, b: number): void => { top = Math.min(top, t - box.top); bottom = Math.max(bottom, b - box.top); };
     const l = logo.getBoundingClientRect();
     ink(l.top + l.height * (logoInk?.top ?? 0), l.top + l.height * (logoInk?.bottom ?? 1));
-    for (const el of [title, ...actions.children, back] as HTMLElement[]) {
+    for (const el of [title, ...actions.children] as HTMLElement[]) {
       const cs = getComputedStyle(el);
       if (cs.visibility === 'hidden' || cs.display === 'none') continue;
       const r = el.getBoundingClientRect();
@@ -129,7 +131,6 @@ export function welcome(events: WelcomeEvents): { root: HTMLElement; show(on: bo
   logo.addEventListener('load', () => { measureLogo(); centre(); });
   void document.fonts?.ready.then(centre);
   new ResizeObserver(centre).observe(stack);
-  recentre = centre;
 
   /* The light, put on the elements as custom properties every frame of the
      board's clock.  Which element is which is by its place, not by its

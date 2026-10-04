@@ -64,6 +64,7 @@ interface Mutant {
   tests: string[];
   what: string;
   rebuild?: boolean; // the mutant is in the engine (../probe/src): the copy gets its own probe/, its classes built again
+  env?: Record<string, string>; // for its tests (and their control): e.g. SPIM_FRAME_COST=1, a test that runs only when asked
 }
 
 const MUTANTS: Mutant[] = [
@@ -124,6 +125,10 @@ const MUTANTS: Mutant[] = [
     find: "detached: cmd.detached ?? false", replace: "detached: cmd.detached ?? true", tests: ["tests/sim/process.test.ts"] },
   { module: "engine", file: "src/sim/transport.ts", what: "RARS's settings back in the JDK's backend (the registry on Windows)",
     find: "    '-Djava.util.prefs.PreferencesFactory=HallymPrefs',\n", replace: "", tests: ["tests/sim/process.test.ts"] },
+  { module: 'engine', file: 'src/main/main.ts', what: 'the folders of killed runs left to pile up (no sweep at the next start)',
+    find: '  if (pid && pid !== process.pid && !alive(pid)) rmSync(path.join(runsDir, name), { recursive: true, force: true });',
+    replace: '  void pid;',
+    tests: ['tests/e2e/settings.e2e.ts'] },
   { module: "engine", file: "src/sim/transport.ts", what: "java started without windowsHide (a console window)",
     find: "windowsHide: cmd.windowsHide ?? true", replace: "windowsHide: cmd.windowsHide ?? false", tests: ["tests/sim/process.test.ts"] },
   { module: "engine", file: "src/sim/transport.ts", what: "the engine not told its parent",
@@ -387,6 +392,9 @@ const MUTANTS: Mutant[] = [
   { module: 'first screen', file: 'src/renderer/startfield/index.ts', what: 'a second loop started when the window is shown again',
     find: "  const stop = (): void => {", replace: "  document.addEventListener('visibilitychange', () => { if (!document.hidden) requestAnimationFrame(frame); });\n  const stop = (): void => {",
     tests: ['tests/e2e/start.e2e.ts'] },
+  { module: 'first screen', file: 'src/renderer/startfield/index.ts', what: 'every frame 18 ms of work more (a board that costs too much)',
+    find: '    drawPulse(upper, geo, t);\n', replace: '    drawPulse(upper, geo, t);\n    { const until = performance.now() + 18; while (performance.now() < until) { /* busy */ } }\n',
+    tests: ['tests/e2e/frame-cost.e2e.ts'], env: { SPIM_FRAME_COST: '1' } },
   { module: 'first screen', file: 'src/renderer/app/app.css', what: 'the column centred by its boxes, not its ink (the hidden way back counted)',
     find: "  transform: translateY(var(--ink-shift, 0px)); }", replace: "  }",
     tests: ['tests/e2e/start.e2e.ts'] },
@@ -633,9 +641,9 @@ function select(repoDir: string, baselineFile: string): Selection {
 
 interface Result { key: string; module: string; what: string; rebuild: boolean; result: 'killed' | 'survived' | 'not applied' | 'error'; seconds: number; by: string }
 
-function run(cmd: string, args: string[], cwd: string, timeout: number): Promise<{ status: number | null; stdout: string }> {
+function run(cmd: string, args: string[], cwd: string, timeout: number, env?: Record<string, string>): Promise<{ status: number | null; stdout: string }> {
   return new Promise((done) => {
-    const child = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(cmd, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: env ? { ...process.env, ...env } : process.env });
     let stdout = '';
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', () => {});
@@ -687,7 +695,7 @@ async function runOne(m: Mutant, display: number | null): Promise<Result> {
       if (!tests.length) continue;
       const isE2e = tests === e2e;
       const [cmd, args] = testCommand(tests, isE2e ? display : null);
-      const t = await run(cmd, args, dir, 300000);
+      const t = await run(cmd, args, dir, 300000, m.env);
       if (t.status !== 0) {
         const first = (isE2e ? /^\s*\d+\) (.*)$/m.exec(t.stdout)?.[1]?.replace(/─+$/, '').trim()
                              : /^\s*not ok \d+ - (.*)$/m.exec(t.stdout)?.[1]) ?? '(no test reported a failure)';
@@ -713,7 +721,7 @@ async function control(list: Mutant[], display: number | null): Promise<string |
       if (!tests.length) continue;
       if (tests === e2e) await run(process.execPath, ['tools/build-ui.ts'], dir, 120000);
       const [cmd, args] = testCommand(tests, tests === e2e ? display : null);
-      const t = await run(cmd, args, dir, 3600000);
+      const t = await run(cmd, args, dir, 3600000, Object.assign({}, ...list.map((m) => m.env ?? {})));
       if (t.status !== 0) {
         const first = (/^\s*\d+\) (.*)$/m.exec(t.stdout)?.[1] ?? /^\s*not ok \d+ - (.*)$/m.exec(t.stdout)?.[1] ?? '').trim();
         return `${tests.length} test file(s) fail with no mutant${first ? `: ${first}` : ''}`;

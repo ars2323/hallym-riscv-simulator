@@ -49,7 +49,9 @@ Measured on the Windows runner, each with a negative control that fails:
   `HKCU\Software\JavaSoft\Prefs\rars` at every start: on a lab PC with one account for everyone, one student's
   RARS settings were the next one's. The engine is given its own factory
   (`-Djava.util.prefs.PreferencesFactory=HallymPrefs`, `probe/src/HallymPrefs.java`), which keeps them in the
-  engine's own folder in the run's folder, a different one for each engine, removed when the app ends; RARS
+  engine's own folder in the run's folder (`%TEMP%\HallymRISCV\run-<pid>-<time>`), a different one for each
+  engine, removed when the app ends -- or, when it was killed (Task Manager), at the next start, which removes
+  every run's folder whose program is gone (`tests/e2e/settings.e2e.ts`, "killed outright"); RARS
   itself is not changed. `tests/e2e/registry.e2e.ts` lists every key and value under
   `HKCU\Software\JavaSoft\Prefs` before and after a run: nothing new. Its control puts the JDK's own factory
   back (`ENGINE_JAVA_ARGS`) with RARS's key removed first, and the key is there again afterwards.

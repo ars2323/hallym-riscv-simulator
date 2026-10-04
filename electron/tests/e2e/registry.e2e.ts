@@ -47,9 +47,13 @@ test('Windows: nothing of RARS is left in the registry after a run', async () =>
   expect(added, 'new under HKCU\\Software\\JavaSoft\\Prefs').toEqual([]);
 });
 
+// RARS's key removed, if it is there.  (Remove-Item on a key that is not there
+// ends PowerShell with 1 even with -ErrorAction SilentlyContinue: CI, fdc3609.)
+const removeRars = (): void => { ps(`if (Test-Path '${PREFS}\\rars') { Remove-Item '${PREFS}\\rars' -Recurse }`); };
+
 test('Windows, negative control: the JDK\'s own factory writes RARS\'s settings to the registry', async () => {
   test.skip(process.platform !== 'win32', 'the registry is Windows\'');
-  ps(`Remove-Item '${PREFS}\\rars' -Recurse -ErrorAction SilentlyContinue`);
+  removeRars();
   const before = new Set(registry());
   try {
     await aRun({ ENGINE_JAVA_ARGS: '-Djava.util.prefs.PreferencesFactory=java.util.prefs.WindowsPreferencesFactory' });
@@ -57,6 +61,6 @@ test('Windows, negative control: the JDK\'s own factory writes RARS\'s settings 
     console.log(`new under ${PREFS} with the JDK's factory: ${added.length}: ${added.slice(0, 6).join(' | ')}`);
     expect(added.some((l) => /\\Prefs\\rars\b/i.test(l)), 'RARS\'s key written').toBe(true);
   } finally {
-    ps(`Remove-Item '${PREFS}\\rars' -Recurse -ErrorAction SilentlyContinue`);
+    removeRars();
   }
 });

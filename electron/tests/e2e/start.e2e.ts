@@ -333,42 +333,7 @@ test('a settled board goes on moving, and the board below it is never drawn agai
   } finally { await r.close(); }
 });
 
-/* The budget is the work in the frame, not the gap between frames: a window
-   that keeps up draws every 16.7 ms whatever it is drawing, so a median gap
-   under 8 ms is not something a 60 Hz screen can show.  The gaps are
-   reported too -- they are what says no frame was missed. */
-test('what a frame costs: growing under 8/16 ms, settled under 5/12 ms', async () => {
-  const r = await launch();
-  const { page } = r;
-  try {
-    const ms = await grown(page);
-    await page.waitForTimeout(2500);
-    const got = await page.evaluate(({ ms }) => {
-      const h = (window as unknown as {
-        __startfield: { work(): number[]; deltas(): number[]; times(): number[] } }).__startfield;
-      const times = h.times(), work = h.work(), deltas = h.deltas();
-      const part = (lo: number, hi: number) => {
-        const w: number[] = [], d: number[] = [];
-        for (let i = 0; i < times.length; i++) {
-          if (times[i] < lo || times[i] >= hi) continue;
-          w.push(work[i]);
-          if (deltas[i] > 0) d.push(deltas[i]);
-        }
-        return { work: w.sort((a, b) => a - b), gaps: d.sort((a, b) => a - b) };
-      };
-      return { growth: part(0, ms), idle: part(ms, Infinity) };
-    }, { ms });
-    const q = (xs: number[], p: number) => xs[Math.min(xs.length - 1, Math.floor(xs.length * p))];
-    for (const [name, part, median, p99] of [
-      ['growing', got.growth, 8, 16], ['settled', got.idle, 5, 12]] as const) {
-      expect(part.work.length, `${name}: frames measured`).toBeGreaterThan(20);
-      console.log(`${name}: drawing median ${q(part.work, 0.5).toFixed(2)} ms, p99 ${q(part.work, 0.99).toFixed(2)} ms`
-        + ` over ${part.work.length} frames; gaps median ${q(part.gaps, 0.5).toFixed(1)} ms, p99 ${q(part.gaps, 0.99).toFixed(1)} ms`);
-      expect(q(part.work, 0.5), `${name}: the median frame`).toBeLessThan(median);
-      expect(q(part.work, 0.99), `${name}: the worst hundredth`).toBeLessThan(p99);
-    }
-  } finally { await r.close(); }
-});
+/* What a frame costs: tests/e2e/frame-cost.e2e.ts, run alone in its own job. */
 
 /* The board, measured off its own pixels at the window it was tuned at.
    Five things at once because they come from one sweep of the clock, which

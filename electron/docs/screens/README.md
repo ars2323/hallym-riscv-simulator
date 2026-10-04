@@ -7,6 +7,13 @@ panel shows the assemble's time, 01:00:00). All of them are taken by `tools/capt
 example files and step counts are written inside the tool. (The Hallym MIPS edition's set, v2.7.1, for this app: the
 same names where the scene is the same.)
 
+- Two retakes in a row rewrite nothing but `start-1093.webp` and `start-2-1093.webp` (measured 2026-10-04). The
+  Editor's pictures had been rewritten every round: the error list coming in shrinks the Editor, and a Ctrl+Home
+  before CodeMirror had measured that left it scrolled 29 px in one take and 31 in the next; the capture now waits
+  two frames and 0.5 s before a key moves the Editor and before every picture, and both takes end at 3 px. The two
+  1093 pictures are not fixed: at 1.25× two takes of the same moment differ by one level on 150-185 of their
+  997,272 pixels (the rasteriser, PNGs compared), and the lossy WebP turns that into differences of up to 18 levels
+  over the whole picture, which the "did not change" rule above does not let through.
 - To retake: in `electron/`, `xvfb-run -a -s '-screen 0 2400x1400x24' npm run screens` (Linux, xvfb software rendering).
 - Default: the whole window at 1280×800. No mouse cursor, tooltips or hover; focus cleared.
 - Format and size: **WebP**, every one of them (`tools/webp.ts`, encoded by the app's own Chromium). Whole windows 400 KB or
