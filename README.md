@@ -1,3 +1,5 @@
+> **개발은 [assembly-studio](https://github.com/ars2323/assembly-studio) 로 옮겼다. 이 저장소는 보존용이며 더 이상 갱신하지 않는다** (인계: [docs/HANDOVER.md](docs/HANDOVER.md)).
+
 # Hallym RISC-V Simulator
 
 한림대학교 컴퓨터구조 수업용 RISC-V 시뮬레이터입니다. RISC-V 어셈블리를 쓰고, 어셈블하고,
